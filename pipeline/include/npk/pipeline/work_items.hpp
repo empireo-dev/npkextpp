@@ -14,7 +14,7 @@ namespace npk::pipeline {
 // archive. Shared by every DecodeTask (and stored-mode WriteJob) that points
 // into it; its read-budget bytes are returned when the last one lets go.
 struct ReadChunk {
-    ArchiveJob* job = nullptr;
+    ArchiveSource* source = nullptr;
     std::uint64_t file_offset = 0;
     std::unique_ptr<std::byte[]> data;
     std::size_t size = 0;
@@ -26,14 +26,14 @@ struct ReadChunk {
 // A slice of a chunk's entries (~1 MB of stored data) for one decoder.
 struct DecodeTask {
     std::shared_ptr<ReadChunk> chunk;
-    std::uint32_t first = 0;   // index into job->entries
+    std::uint32_t first = 0;   // index into source->entries
     std::uint32_t count = 0;
 };
 
 // A finished file waiting to be written.
 struct WriteJob {
     PlannedEntry* entry = nullptr;
-    const ArchiveJob* job = nullptr;
+    const ArchiveSource* source = nullptr;
     std::span<const std::byte> data;      // into `owned` or into `chunk`
     std::unique_ptr<std::byte[]> owned;   // decompressed output
     BudgetLease lease;                    // output-budget bytes of `owned`

@@ -1,66 +1,145 @@
 #pragma once
 
-#include "npk/archive.hpp"
-#include "npk/error.hpp"
+#include "npk/entry.hpp"
 #include "npk/install.hpp"
 #include "npk/names.hpp"
 
+#include <cstddef>
 #include <cstdint>
 #include <filesystem>
+#include <optional>
+#include <span>
 #include <string>
+#include <string_view>
+#include <utility>
 #include <vector>
 
 namespace npk {
 
-// What happened to one planned entry. Each slot is written by exactly one
-// thread, so results need no locking.
+// Output layout (all paths relative to the output folder, '/' separated):
+//
+//   res/<path in the tree>                 files whose name was recovered
+//   res/ui/_unnamed/<id>.<ext>             files whose name is unknown, in their archive's folder
+//   res/ui/_overridden/<source>/<path>     lower-priority copies (keep_overridden only)
+//   script/...                             the script tree
+//   <stem>/...                             an archive outside every mount folder
+//
+// Archives mounted at the same place from different mount folders share one
+// output folder (an OutputGroup); the highest-priority source provides a file
+// that several of them hold. Output folders nest (res/ holds res/ui/), and a
+// nested archive's copy of a file wins over the parent archive's.
+inline constexpr std::string_view kUnnamedFolder = "_unnamed";
+inline constexpr std::string_view kOverriddenFolder = "_overridden";
+inline constexpr std::string_view kOutsideRecords = "_outside";
+
+// Where one archive belongs: in the game, in the output and in the index.
+struct Location {
+    std::string folder;    // output folder: "res/model/character"
+    std::string label;     // path relative to the installation if inside it, else the path given
+    int rank = 0;          // lower = higher priority
+    std::string mount;     // mount folder relative to the installation ("Documents/res"), or ""
+    std::string record;    // its index record, relative to _archives/: "res/ui.npk.csv"
+};
+
+// `order` (the archive's position in the input list) ranks archives outside the
+// installation's mount folders after all of those.
+[[nodiscard]] Location locate(const std::filesystem::path& archive, const Installation* installation,
+                              int order = 0);
+
+// What to do with one entry.
+enum class Disposition : std::uint8_t {
+    write,        // the copy that ends up in the tree
+    write_copy,   // overridden, written to _overridden/ (keep_overridden)
+    skip,         // overridden, not written (recorded in the index only)
+};
+
+// What happened to it; set by whoever extracts the entry. Each PlannedEntry is
+// written by exactly one thread, so results need no locking.
 enum class EntryStatus : std::uint8_t {
     pending,
     written,
-    overridden,        // a higher-priority archive provides this file
-    failed_read,
-    failed_decode,     // crc / decompression / size error
-    failed_write,
+    failed,
 };
 
 struct PlannedEntry {
-    std::uint32_t entry_index = 0;   // index into Archive::entries()
-    std::string output_path;         // relative to the output root, '/' separators
-    bool write = true;               // false: recorded in the index only
+    std::uint32_t toc_index = 0;   // into ArchiveSource::toc
+    Disposition disposition = Disposition::write;
+    bool unnamed = false;          // path lacks the extension; see output_path()
+    std::int32_t replaced_by = -1; // overridden: index into Plan::labels of the winner
+    std::string path;              // relative to the output folder ('/'); empty for skip
     EntryStatus status = EntryStatus::pending;
+    std::string error;             // failed: why
 };
 
-// One archive to unpack, entries sorted by offset for front-to-back reading.
-struct ArchiveJob {
-    Archive archive;
-    std::string mount_prefix;
-    std::vector<PlannedEntry> entries;
+// The final output path of an entry: path, plus ".<ext>" guessed from the
+// decoded data for unnamed entries.
+[[nodiscard]] std::string output_path(const PlannedEntry& entry, std::span<const std::byte> data);
+
+// One .npk file that is part of an output group.
+struct ArchiveSource {
+    std::filesystem::path path;
+    Location location;
+    std::uint64_t file_size = 0;
+    std::vector<Entry> toc;               // the whole table of contents, in table order
+    std::vector<PlannedEntry> entries;    // processed entries, in storage (offset) order
+    std::uint64_t packed_bytes = 0;       // of `entries`
+    std::uint64_t raw_bytes = 0;
+
+    [[nodiscard]] const Entry& entry(const PlannedEntry& planned) const { return toc[planned.toc_index]; }
+    [[nodiscard]] const std::string& label() const noexcept { return location.label; }
+};
+
+// All archives mounted at the same place in the tree, unpacked into one folder.
+struct OutputGroup {
+    std::string folder;                 // "res/model/character"
+    std::vector<ArchiveSource> sources; // highest priority first
+
+    // The folder that holds this one: "res/model" for "res/model/character", "" at the top.
+    [[nodiscard]] std::string_view section() const noexcept;
+};
+
+struct PlanTotals {
+    std::uint64_t entries = 0;          // processed entries
+    std::uint64_t files_to_write = 0;   // write + write_copy
+    std::uint64_t overridden = 0;       // write_copy + skip
+    std::uint64_t unnamed = 0;          // of the written ones
+    std::uint64_t packed_bytes = 0;     // stored bytes to read for the written ones
+    std::uint64_t raw_bytes = 0;        // bytes to write
 };
 
 struct Plan {
-    std::filesystem::path output_root;
-    std::vector<ArchiveJob> archives;
-    std::vector<std::string> directories;   // created before extraction starts
-    std::uint64_t total_files = 0;
-    std::uint64_t total_raw_bytes = 0;
+    std::vector<OutputGroup> groups;    // nested sections first, then by name
+    std::vector<std::pair<std::filesystem::path, std::string>> unreadable;   // (archive, reason)
+    std::vector<std::string> labels;    // archive labels referenced by PlannedEntry::replaced_by
+    std::vector<std::string> directories;   // every folder that receives files, sorted
+    PlanTotals totals;
+
+    [[nodiscard]] std::size_t source_count() const noexcept;
 };
 
 struct PlanOptions {
-    std::filesystem::path output_root;
-    std::vector<std::string> only;   // archive names / substrings; empty = all
-    bool keep_overridden = false;    // also write lower-priority copies
+    bool keep_overridden = false;          // also write lower-priority copies
+    std::optional<std::size_t> limit;      // only the first N entries (by offset) of each archive
 };
 
-// Turns an installation into a Plan: which entry of which archive goes where.
+// Turns a list of archives into a Plan: reads every table of contents, places
+// each archive in the tree, recovers names, and decides for every entry whether
+// and where it is written.
+//
+// Overrides are decided up front from the tables of contents: within a group
+// the first source (by priority) holding an id provides it. Unlike npkext, a
+// provider whose entry later fails to decode does not hand the file to the next
+// copy; the failure is reported instead.
 class Planner {
 public:
-    Planner(const Installation& installation, NameResolver& names);
+    // `installation` may be null (loose archives). The manifest must outlive the planner.
+    Planner(const ResourceManifest& manifest, const Installation* installation);
 
-    [[nodiscard]] Result<Plan> build(const PlanOptions& options);
+    [[nodiscard]] Plan build(std::span<const std::filesystem::path> archives, const PlanOptions& options);
 
 private:
-    const Installation& installation_;
-    NameResolver& names_;
+    NameResolver names_;
+    const Installation* installation_;
 };
 
 } // namespace npk

@@ -54,7 +54,10 @@ FetchContent_MakeAvailable(zstd_source)
 
 # zstd's assembly is built with -Wa,--noexecstack, which LTO drops with a warning;
 # its C code gains nothing measurable from LTO here, so keep it out.
-set_target_properties(libzstd_static PROPERTIES INTERPROCEDURAL_OPTIMIZATION OFF)
+set_target_properties(libzstd_static PROPERTIES
+    INTERPROCEDURAL_OPTIMIZATION OFF
+    INTERPROCEDURAL_OPTIMIZATION_RELEASE OFF
+    INTERPROCEDURAL_OPTIMIZATION_RELWITHDEBINFO OFF)
 
 add_library(npk_zstd INTERFACE)
 target_link_libraries(npk_zstd INTERFACE libzstd_static)

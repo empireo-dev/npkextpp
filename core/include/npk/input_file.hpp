@@ -6,6 +6,7 @@
 #include <cstdint>
 #include <filesystem>
 #include <span>
+#include <vector>
 
 namespace npk {
 
@@ -23,13 +24,20 @@ public:
 
     [[nodiscard]] static Result<InputFile> open(const std::filesystem::path& path);
 
+    // Whole file in one go (small files: resdb).
+    [[nodiscard]] static Result<std::vector<std::byte>> read_all(const std::filesystem::path& path);
+
     [[nodiscard]] std::uint64_t size() const noexcept { return size_; }
     [[nodiscard]] bool is_open() const noexcept;
 
     // Reads exactly out.size() bytes starting at offset.
     [[nodiscard]] Result<void> read_at(std::uint64_t offset, std::span<std::byte> out) const;
 
-    // Hint that the range will not be read again (posix_fadvise DONTNEED).
+    // Hint that the file will be read front to back (bigger read-ahead).
+    void advise_sequential() const noexcept;
+
+    // Hint that the range will not be read again, so its cached pages can go
+    // (posix_fadvise DONTNEED). Does nothing where unsupported.
     void forget(std::uint64_t offset, std::uint64_t length) const noexcept;
 
     void close() noexcept;

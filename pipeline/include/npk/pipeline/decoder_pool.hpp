@@ -13,7 +13,7 @@
 
 namespace npk::pipeline {
 
-// Stage 2, one thread per hardware thread. Each thread owns a DecodeContext,
+// Stage 2, one thread per hardware thread. Each thread owns a Decoder,
 // decodes the entries of its task in place and allocates the output from the
 // output budget. The last thread to finish closes the write queue.
 class DecoderPool {

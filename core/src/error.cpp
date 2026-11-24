@@ -13,6 +13,7 @@ const char* to_string(Errc code) noexcept
 {
     switch (code) {
     case Errc::not_implemented: return "not implemented";
+    case Errc::invalid_input: return "invalid input";
     case Errc::io_error: return "I/O error";
     case Errc::bad_format: return "bad format";
     case Errc::crc_packed_mismatch: return "stored data checksum mismatch";

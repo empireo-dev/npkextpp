@@ -6,14 +6,17 @@ include("${PROJECT_SOURCE_DIR}/cmake/NpkWarnings.cmake")
 add_library(npk_core STATIC
     src/error.cpp
     src/hash.cpp
+    src/paths.cpp
     src/input_file.cpp
     src/archive.cpp
-    src/codec.cpp
+    src/decoder.cpp
+    src/filetypes.cpp
     src/resdb.cpp
     src/mounts.cpp
     src/install.cpp
     src/names.cpp
     src/plan.cpp
+    src/inputs.cpp
 )
 add_library(npk::core ALIAS npk_core)
 
