@@ -166,7 +166,7 @@ int main(int argc, char** argv)
         std::fprintf(stderr, "--install DIR is required (or use --curve)\n");
         return 2;
     }
-    auto installation = npk::Installation::open(*install);
+    auto installation = npk::Installation::open(*install, npk::ArchiveSearch::scan);
     if (!installation) {
         std::fprintf(stderr, "%s\n", installation.error().message.c_str());
         return 2;

@@ -14,6 +14,10 @@
 #include "npk/resdb.hpp"
 
 #include <map>
+#include <set>
+#if !defined(_WIN32)
+#include <unistd.h>
+#endif
 #include <optional>
 
 using namespace test;
@@ -54,7 +58,7 @@ const npk::ArchiveSource* source_labelled(const npk::OutputGroup& group, std::st
 npk::Plan plan_install(const fs::path& root, const npk::PlanOptions& options, npk::ResourceManifest& manifest_out,
                        std::optional<npk::Installation>& installation_out)
 {
-    installation_out = *npk::Installation::open(root);
+    installation_out = *npk::Installation::open(root, npk::ArchiveSearch::scan);
     manifest_out = *npk::ResourceManifest::from_files(installation_out->resdb_files());
     npk::Planner planner(manifest_out, &*installation_out);
     const auto archives = installation_out->archives();
@@ -408,7 +412,7 @@ TEST(filter_by_name)
 {
     TempDir dir;
     const fs::path root = fake_install(dir.path());
-    const auto installation = npk::Installation::open(root);
+    const auto installation = npk::Installation::open(root, npk::ArchiveSearch::scan);
     CHECK(installation.has_value());
     const auto archives = installation->archives();
     for (const char* pattern : {"ui.npk", "ui", "UI", "u?.npk", "u*"}) {
@@ -426,7 +430,7 @@ TEST(resolve_inputs)
 {
     TempDir dir;
     const fs::path root = fake_install(dir.path());
-    const auto installation = npk::Installation::open(root);
+    const auto installation = npk::Installation::open(root, npk::ArchiveSearch::scan);
     CHECK(installation.has_value());
 
     auto by_path = npk::resolve_inputs(strings({"res/ui.npk"}), &*installation);
@@ -471,6 +475,34 @@ TEST(known_archive_list_is_checked_instead_of_scanning)
     // None of the list is here (an empty list, another game version): scan after all.
     const auto unknown = npk::Installation::open(root, npk::ArchiveSearch::known, strings({"res/other.npk"}));
     CHECK(unknown && unknown->scanned() && unknown->archives().size() == 6u && unknown->missing_archives().empty());
+}
+
+TEST(folders_that_cannot_be_opened_are_reported)
+{
+#if !defined(_WIN32)
+    if (::geteuid() == 0) return;   // root opens everything
+    TempDir dir;
+    const fs::path root = fake_install(dir.path());
+    const auto known = strings({"res/ui.npk", "res/model/hero.npk", "Documents/res/ui.npk"});
+    fs::permissions(root / "res" / "model", fs::perms::none);
+    fs::permissions(root / "Documents", fs::perms::none);
+
+    const auto listed = npk::Installation::open(root, npk::ArchiveSearch::known, known);
+    const auto scanned = npk::Installation::open(root, npk::ArchiveSearch::scan, known);
+    const auto blocked_resdb = listed ? listed->unreadable_resdb() : std::vector<std::string>{};
+    fs::permissions(root / "res" / "model", fs::perms::owner_all);
+    fs::permissions(root / "Documents", fs::perms::owner_all);
+
+    CHECK(listed && listed->archives().size() == 1u);
+    CHECK(listed->missing_archives().size() == 2u);
+    CHECK(listed->unreadable_folders() == strings({"Documents", "res/model"}));
+    CHECK(blocked_resdb == strings({"Documents/res/resdb"}));
+    CHECK(scanned && scanned->unreadable_folders() == strings({"Documents", "res/model"}));
+    CHECK_EQ(scanned->archives().size(), 3u);   // res.npk, res/ui.npk, script.npk
+
+    const auto fine = npk::Installation::open(root, npk::ArchiveSearch::scan, known);
+    CHECK(fine && fine->unreadable_folders().empty() && fine->unreadable_resdb().empty());
+#endif
 }
 
 TEST(files_already_in_the_output_are_left_out_of_the_plan)
@@ -521,7 +553,7 @@ TEST(installation_layout)
 {
     TempDir dir;
     const fs::path root = fake_install(dir.path());
-    const auto installation = npk::Installation::open(root);
+    const auto installation = npk::Installation::open(root, npk::ArchiveSearch::scan);
     CHECK(installation.has_value());
     CHECK_EQ(installation->archives().size(), 6u);
     CHECK_EQ(installation->resdb_files().size(), 1u);
@@ -642,6 +674,26 @@ TEST(limit_takes_the_first_entries_in_storage_order)
         CHECK_EQ(source.entry(source.entries[i]).id, npk::path_id("f" + std::to_string(i)));
     }
     CHECK(source.location.record.starts_with("_outside/"));
+}
+
+TEST(a_copy_of_a_nested_archive_gets_its_names)
+{
+    // res/model/hero.npk holds "body.mesh", listed in resdb as model\hero\body.mesh.
+    // Copied out of the installation, its place no longer says the prefix.
+    TempDir dir;
+    const fs::path path = write_npk(dir.path() / "copy" / "hero.npk",
+                                    {{"body.mesh", bytes("M")}, {"skin.png", bytes("P")}, {"unlisted", bytes("U")}});
+    const npk::ResourceManifest manifest(
+        std::vector<std::string>{"model\\hero\\body.mesh", "model\\hero\\skin.png", "ui\\body.mesh"});
+    npk::Planner planner(manifest, nullptr);
+    const std::vector<fs::path> archives{path};
+    const npk::Plan plan = planner.build(archives, {});
+    CHECK_EQ(plan.groups.size(), 1u);
+    std::set<std::string> written;
+    for (const auto& planned : plan.groups[0].sources[0].entries) written.insert(planned.path);
+    CHECK(written.contains("hero/body.mesh"));
+    CHECK(written.contains("hero/skin.png"));
+    CHECK_EQ(plan.totals.unnamed, 1u);
 }
 
 TEST(unreadable_archives_are_listed_not_fatal)

@@ -61,7 +61,7 @@ struct Summary {
     std::optional<Error> fatal;            // what stopped the run (disk full, ...)
     std::optional<Error> index_error;      // _archives/ could not be written
     DiskKind disk = DiskKind::unknown;     // what the probe found
-    double probe_read_ms = 0;              // its median random read time
+    double probe_read_ms = 0;              // its 90th percentile random read time
     unsigned writers = 0;                  // the tuner's final choices
     std::size_t read_block = 0;
 };

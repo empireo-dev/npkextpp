@@ -251,15 +251,23 @@ noisy to trust small differences (on a real hard disk, 1, 2 and 4 writers were
 within 5 % of each other). So before the run, the pipeline times random 4 KiB
 reads that bypass the OS cache (`O_DIRECT` / `FILE_FLAG_NO_BUFFERING`):
 
-- It reads the largest archive if that is on the output's volume and at least
-  64 MiB. Otherwise it writes a 16 MiB test file into the output folder, flushes
-  it, reads that, and deletes it.
-- At least 16 reads and 0.3 s, at most 128 reads or 2 s. The **median** read time
-  decides, so a stall or a disk waking up doesn't.
-- A median of **1 ms or more is a hard disk**. A hard disk needs 2 ms at the very
-  least (seek plus half a turn; usually 5–15 ms), an SSD 0.05–0.3 ms, so the
-  threshold has room on both sides. Measured on this project's VM over a hard
-  disk: 5–20 ms.
+- What it reads, the first that works: the largest archive, if it is on the
+  output's volume; another existing file of at least 16 MiB there (in the output
+  folder or a folder above it, looking through at most 3,000 entries or 0.3 s);
+  a 16 MiB test file it writes into the output folder, flushes and deletes.
+  Existing files count only if nothing wrote them in the last 10 minutes, since
+  a cache may still hold younger ones.
+- The read places are random on every run, so an earlier probe has not left
+  them in a cache. At least 30 reads and 0.3 s, at most 128 reads or 2 s.
+- The **90th percentile** decides: **1 ms or more is a hard disk**, so at least
+  one read in ten took a hard disk's time. A hard disk needs 2 ms at the very
+  least (seek plus half a turn; usually 5–15 ms), an SSD 0.05–0.3 ms.
+- Not the median: on this project's VM over a hard disk, the test file had just
+  been written, and the disk's or host's cache answered 60–75 % of its reads in
+  0.1–0.7 ms. The median came out at 0.6–2 ms and called the disk an SSD. The
+  other reads took 3–90 ms, so the 90th percentile was 20–40 ms. An untouched
+  archive on the same disk: median 20 ms. A share backed by an SSD: 90th
+  percentile 0.1–0.2 ms.
 - If the probe can't run, the disk is tuned as an SSD: too few writers on an SSD
   costs far more than too many on a hard disk.
 - It also times writing the 16 MiB test file (flushed), only to show it: caches
@@ -276,10 +284,11 @@ That picks a profile (`tunables.hpp`):
 | SSD (or unknown) | 4 writers | 32 | 3 % |
 | hard disk | 1 writer | 4 | 10 % |
 
-The log says what it found: `disk: hard disk (random reads from an archive:
-median 8.31 ms of 30)`, and the summary line names the kind.
+The log says what it found: `disk: hard disk (30 random reads from an archive:
+median 8.31 ms, 90th percentile 19.40 ms)`, and the summary line names the kind.
 
-Inside a virtual machine the host's cache can make a hard disk look like an SSD.
+Inside a virtual machine the host's cache can still make a hard disk look like an
+SSD, if it holds the whole file that is read.
 That's the safe direction to be wrong in.
 
 **The search** (`WriterSearch` in `tuner.cpp`) starts once the profile's starting

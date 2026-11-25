@@ -71,6 +71,27 @@ std::string_view last_part(std::string_view folder)
     return slash == std::string_view::npos ? folder : folder.substr(slash + 1);
 }
 
+// A copy outside every mount folder: tried as a root archive and as a top-level
+// branch (as npkext does), unless the manifest lists more of its files under
+// another folder (a copy of res/model/texture0.npk, say).
+ArchiveNames names_for_copy(NameResolver& resolver, const fs::path& archive, std::span<const Entry> toc)
+{
+    const std::vector<std::string> defaults = candidate_prefixes(archive);
+    ArchiveNames names = resolver.names_for(std::span<const std::string>(defaults));
+    std::size_t named = 0;
+    for (const Entry& entry : toc) named += names.find(entry.id).has_value() ? 1 : 0;
+    if (named * 2 >= toc.size()) return names;
+
+    std::vector<std::uint32_t> ids;
+    ids.reserve(toc.size());
+    for (const Entry& entry : toc) ids.push_back(entry.id);
+    auto [prefix, found] = resolver.guess_prefix(ids);
+    if (found <= named) return names;
+    std::vector<std::string> prefixes{std::move(prefix)};
+    prefixes.insert(prefixes.end(), defaults.begin(), defaults.end());
+    return resolver.names_for(std::span<const std::string>(prefixes));
+}
+
 // Sort key: alphabetical, but every folder after the folders nested in it
 // (res/model/character, res/ui, res, then the top level).
 std::vector<std::string> tree_order(std::string_view folder)
@@ -361,7 +382,9 @@ Plan Planner::build(std::span<const fs::path> archives, const PlanOptions& optio
         for (ArchiveSource& source : group.sources) {
             const std::int32_t self = labels.index(source.label());
             const std::optional<fs::path> relative = installation_ ? installation_->relative(source.path) : std::nullopt;
-            const ArchiveNames names = names_.names_for(relative ? *relative : source.path);
+            const fs::path& where = relative ? *relative : source.path;
+            ArchiveNames names = names_.names_for(where);
+            if (!place(where)) names = names_for_copy(names_, where, source.toc);
 
             for (PlannedEntry& planned : source.entries) {
                 const Entry& entry = source.toc[planned.toc_index];

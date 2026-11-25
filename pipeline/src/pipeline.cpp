@@ -126,13 +126,14 @@ Summary run(Plan& plan, const Options& options, Progress& progress, std::stop_to
             }
             const DiskProbe probe = probe_disk(ctx.output_root, archives);
             ctx.disk = probe.kind;
-            summary.probe_read_ms = probe.median_read_ms;
+            summary.probe_read_ms = probe.slow_read_ms;
             if (probe.kind == DiskKind::unknown) {
                 ctx.log("disk: " + probe.problem + "; tuning as for an SSD");
             } else {
-                char line[160];
-                std::snprintf(line, sizeof line, "disk: %s (random reads from %s: median %.2f ms of %zu)",
-                              name_of(probe.kind), probe.read_from.c_str(), probe.median_read_ms, probe.reads);
+                char line[200];
+                std::snprintf(line, sizeof line, "disk: %s (%zu random reads from %s: median %.2f ms, 90th percentile %.2f ms)",
+                              name_of(probe.kind), probe.reads, probe.read_from.c_str(), probe.median_read_ms,
+                              probe.slow_read_ms);
                 ctx.log(line);
             }
         }

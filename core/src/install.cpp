@@ -32,6 +32,18 @@ bool is_file(const fs::path& path)
     return fs::is_regular_file(path, error);
 }
 
+bool can_open(const fs::path& folder)
+{
+    std::error_code error;
+    fs::directory_iterator it(folder, error);
+    return !error;
+}
+
+void add_unique(std::vector<std::string>& list, std::string item)
+{
+    if (std::ranges::find(list, item) == list.end()) list.push_back(std::move(item));
+}
+
 } // namespace
 
 std::span<const std::string> known_archives()
@@ -102,30 +114,74 @@ void Installation::find_archives(ArchiveSearch search, std::span<const std::stri
     if (search == ArchiveSearch::known) {
         for (const std::string& relative : known) {
             fs::path path = root_ / from_utf8(relative);
-            if (is_file(path)) archives_.push_back(std::move(path));
-            else missing_.push_back(relative);
+            if (is_file(path)) {
+                archives_.push_back(std::move(path));
+            } else {
+                missing_.push_back(relative);
+                note_if_blocked(relative);
+            }
         }
         if (!archives_.empty()) {
             std::ranges::sort(archives_);
+            std::ranges::sort(unreadable_);
             return;
         }
         missing_.clear();   // a different game version, or not the game: the list says nothing here
+        unreadable_.clear();
     }
     archives_ = scan_archives();
     scanned_ = true;
 }
 
-std::vector<fs::path> Installation::scan_archives() const
+void Installation::note_if_blocked(const std::string& relative)
+{
+    // The first folder on the way that exists but cannot be opened, if any.
+    fs::path folder = root_;
+    std::string walked;
+    for (std::size_t start = 0, slash; (slash = relative.find('/', start)) != std::string::npos; start = slash + 1) {
+        const std::string part = relative.substr(start, slash - start);
+        walked += (walked.empty() ? "" : "/") + part;
+        folder /= from_utf8(part);
+        if (std::ranges::find(unreadable_, walked) != unreadable_.end()) return;
+        if (!is_dir(folder)) {
+            std::error_code error;
+            (void)fs::status(folder, error);
+            if (error == std::errc::permission_denied) add_unique(unreadable_, walked);   // a parent cannot be opened
+            return;
+        }
+        if (!can_open(folder)) {
+            add_unique(unreadable_, walked);
+            return;
+        }
+    }
+}
+
+std::vector<fs::path> Installation::scan_archives()
 {
     std::vector<fs::path> found;
-    std::error_code error;
-    fs::recursive_directory_iterator it(root_, fs::directory_options::skip_permission_denied, error);
-    for (; !error && it != fs::recursive_directory_iterator(); it.increment(error)) {
-        std::error_code type_error;
-        if (!it->is_regular_file(type_error)) continue;
-        if (iequals_ascii(to_utf8(it->path().extension()), ".npk")) found.push_back(it->path());
+    std::vector<fs::path> folders{root_};
+    while (!folders.empty()) {
+        const fs::path folder = std::move(folders.back());
+        folders.pop_back();
+        std::error_code error;
+        fs::directory_iterator it(folder, error);
+        if (error) {
+            std::string rel = to_utf8(folder.lexically_relative(root_));
+            std::ranges::replace(rel, '\\', '/');
+            add_unique(unreadable_, rel.empty() ? std::string(".") : rel);
+            continue;
+        }
+        for (; !error && it != fs::directory_iterator(); it.increment(error)) {
+            std::error_code type_error;
+            if (it->is_symlink(type_error)) continue;
+            if (it->is_directory(type_error)) folders.push_back(it->path());
+            else if (it->is_regular_file(type_error) && iequals_ascii(to_utf8(it->path().extension()), ".npk")) {
+                found.push_back(it->path());
+            }
+        }
     }
     std::ranges::sort(found);
+    std::ranges::sort(unreadable_);
     return found;
 }
 
@@ -137,6 +193,19 @@ std::vector<fs::path> Installation::resdb_files() const
         if (is_file(candidate)) files.push_back(std::move(candidate));
     }
     return files;
+}
+
+std::vector<std::string> Installation::unreadable_resdb() const
+{
+    std::vector<std::string> out;
+    for (const char* location : kResdbLocations) {
+        std::error_code error;
+        const fs::path candidate = root_ / from_utf8(location);
+        if (is_file(candidate)) continue;
+        (void)fs::status(candidate, error);
+        if (error == std::errc::permission_denied) out.emplace_back(location);
+    }
+    return out;
 }
 
 std::optional<fs::path> Installation::relative(const fs::path& path) const

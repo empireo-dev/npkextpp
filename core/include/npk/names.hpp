@@ -9,6 +9,7 @@
 #include <string>
 #include <string_view>
 #include <unordered_map>
+#include <utility>
 #include <vector>
 
 namespace npk {
@@ -66,6 +67,12 @@ public:
     [[nodiscard]] const NameTable& table_for(std::string_view prefix);
     [[nodiscard]] ArchiveNames names_for(std::span<const std::string> prefixes);
     [[nodiscard]] ArchiveNames names_for(const std::filesystem::path& archive);
+
+    // For an archive copied out of the installation, where its place does not say
+    // the prefix: the manifest folder under which the most of `ids` are listed
+    // (every manifest path is hashed once per folder level), and how many. Empty
+    // if no id is listed below any folder.
+    [[nodiscard]] std::pair<std::string, std::size_t> guess_prefix(std::span<const std::uint32_t> ids) const;
 
 private:
     const ResourceManifest* manifest_;

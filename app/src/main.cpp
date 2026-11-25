@@ -142,6 +142,34 @@ void show_sources(Console& console, const std::optional<npk::Installation>& inst
                      " known archives here" + chosen + (missing ? ", " + format_count(missing) + " missing" : "") +
                      " (--scan looks for others)");
     }
+    const auto& blocked = installation->unreadable_folders();
+    if (!blocked.empty()) {
+        std::string names;
+        for (std::size_t i = 0; i < blocked.size() && i < 8; ++i) names += (i ? ", " : "") + blocked[i];
+        if (blocked.size() > 8) names += " and " + format_count(blocked.size() - 8) + " more";
+        console.line("Warning       " + format_count(blocked.size()) + (blocked.size() == 1 ? " folder" : " folders") +
+                     " of the installation cannot be opened (permission denied), so the archives in " +
+                     (blocked.size() == 1 ? "it" : "them") + " are left out: " + names);
+    }
+}
+
+// Says why there are no names, if there are none.
+void show_missing_names(Console& console, const CliOptions& options, const std::optional<npk::Installation>& installation,
+                        std::size_t manifests)
+{
+    if (manifests != 0 || !options.resdb.empty()) return;
+    if (!installation) {
+        console.line("Warning       no name manifest: files keep their hashed names. Give --resdb with the game's "
+                     "res/resdb (and Documents/res/resdb) to get names.");
+        return;
+    }
+    const std::vector<std::string> blocked = installation->unreadable_resdb();
+    std::string where;
+    for (const char* location : npk::kResdbLocations) where += (where.empty() ? "" : " or ") + std::string(location);
+    console.line("Warning       " +
+                 (blocked.empty() ? "no name manifest in the installation (" + where + ")"
+                                  : "the name manifest cannot be opened (permission denied)") +
+                 ": files keep their hashed names. --resdb FILE gives one.");
 }
 
 void show_plan(Console& console, const npk::Plan& plan, std::size_t names, std::size_t manifests, bool verbose)
@@ -352,6 +380,7 @@ int run(const CliOptions& options, Console& console)
         if (!fs::is_regular_file(resdb, error)) throw InputError("resdb file not found: " + npk::to_utf8(resdb));
     }
     const npk::ResourceManifest manifest = unwrap(npk::ResourceManifest::from_files(resdb_files));
+    show_missing_names(console, options, inputs.installation, resdb_files.size());
 
     // What an earlier run already wrote stays (unless --overwrite).
     npk::ExistingFiles existing;

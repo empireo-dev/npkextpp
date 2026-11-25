@@ -53,11 +53,17 @@ public:
     [[nodiscard]] bool scanned() const noexcept { return scanned_; }
     [[nodiscard]] std::size_t known_count() const noexcept { return known_count_; }
 
-    // Every .npk file below the root, sorted (walks the folder).
-    [[nodiscard]] std::vector<std::filesystem::path> scan_archives() const;
+    // Folders of the installation that exist but could not be opened (permission
+    // denied), '/' relative, sorted: archives in them are not found.
+    [[nodiscard]] const std::vector<std::string>& unreadable_folders() const noexcept { return unreadable_; }
+
+    // Every .npk file below the root, sorted (walks the folder; notes the folders it cannot open).
+    [[nodiscard]] std::vector<std::filesystem::path> scan_archives();
 
     // The resource manifests that exist, patched one first.
     [[nodiscard]] std::vector<std::filesystem::path> resdb_files() const;
+    // Manifest locations (kResdbLocations) that cannot be checked: permission denied.
+    [[nodiscard]] std::vector<std::string> unreadable_resdb() const;
 
     // `path` relative to the root (symlinks resolved), or nullopt if it lies outside.
     [[nodiscard]] std::optional<std::filesystem::path> relative(const std::filesystem::path& path) const;
@@ -69,10 +75,12 @@ public:
 private:
     explicit Installation(std::filesystem::path root) : root_(std::move(root)) {}
     void find_archives(ArchiveSearch search, std::span<const std::string> known);
+    void note_if_blocked(const std::string& relative);
 
     std::filesystem::path root_;
     std::vector<std::filesystem::path> archives_;
     std::vector<std::string> missing_;
+    std::vector<std::string> unreadable_;
     std::size_t known_count_ = 0;
     bool scanned_ = false;
 };

@@ -7,6 +7,7 @@
 
 #include <algorithm>
 #include <numeric>
+#include <unordered_set>
 
 namespace npk {
 
@@ -97,6 +98,23 @@ ArchiveNames NameResolver::names_for(const std::filesystem::path& archive)
 {
     const std::vector<std::string> prefixes = candidate_prefixes(archive);
     return names_for(std::span<const std::string>(prefixes));
+}
+
+std::pair<std::string, std::size_t> NameResolver::guess_prefix(std::span<const std::uint32_t> ids) const
+{
+    const std::unordered_set<std::uint32_t> wanted(ids.begin(), ids.end());
+    std::unordered_map<std::string, std::size_t> hits;   // lower-case prefix -> ids found under it
+    for (const std::string& path : manifest_->paths()) {
+        const std::string_view text = path;
+        for (std::size_t slash = text.find('\\'); slash != std::string_view::npos; slash = text.find('\\', slash + 1)) {
+            if (wanted.contains(path_id(text.substr(slash + 1)))) ++hits[lower_ascii(text.substr(0, slash + 1))];
+        }
+    }
+    std::pair<std::string, std::size_t> best;
+    for (auto& [prefix, count] : hits) {
+        if (count > best.second || (count == best.second && prefix < best.first)) best = {prefix, count};
+    }
+    return best;
 }
 
 } // namespace npk

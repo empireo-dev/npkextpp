@@ -3,8 +3,18 @@
 # it as is (link npk::core).
 include("${PROJECT_SOURCE_DIR}/cmake/NpkWarnings.cmake")
 
-# The built-in list of the game's archives (see the file).
-file(READ "${CMAKE_CURRENT_SOURCE_DIR}/data/known_archives.txt" NPK_KNOWN_ARCHIVES)
+# The built-in list of the game's archives (see the file), one string literal per
+# line: MSVC refuses a single literal over 16 KiB.
+file(STRINGS "${CMAKE_CURRENT_SOURCE_DIR}/data/known_archives.txt" npk_known_lines)
+set(NPK_KNOWN_ARCHIVES "")
+foreach(npk_line IN LISTS npk_known_lines)
+    if(npk_line MATCHES "^[ \t]*#" OR npk_line STREQUAL "")
+        continue()
+    endif()
+    string(REPLACE "\\" "\\\\" npk_line "${npk_line}")
+    string(REPLACE "\"" "\\\"" npk_line "${npk_line}")
+    string(APPEND NPK_KNOWN_ARCHIVES "    \"${npk_line}\\n\"\n")
+endforeach()
 set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/data/known_archives.txt")
 configure_file(src/known_archives.cpp.in "${CMAKE_CURRENT_BINARY_DIR}/generated/known_archives.cpp" @ONLY)
 

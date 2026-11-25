@@ -35,8 +35,11 @@ using Clock = std::chrono::steady_clock;
 
 constexpr std::size_t kBlock = 4096;                      // one read; also the alignment uncached reads need
 constexpr std::uint64_t kTestFileBytes = 16ull << 20;
-constexpr std::uint64_t kMinArchiveBytes = 64ull << 20;   // smaller archives: write a test file instead
-constexpr std::size_t kMinReads = 16;
+constexpr std::uint64_t kMinFileBytes = 16ull << 20;   // smaller files: too few places to seek between
+constexpr auto kUntouchedFor = std::chrono::minutes(10);   // younger files may still sit in a cache
+constexpr std::size_t kSearchEntries = 3000;              // looking for an existing file to read
+constexpr auto kSearchTime = std::chrono::milliseconds(300);
+constexpr std::size_t kMinReads = 30;
 constexpr std::size_t kMaxReads = 128;
 constexpr auto kMinTime = std::chrono::milliseconds(300);
 constexpr auto kMaxTime = std::chrono::seconds(2);
@@ -161,13 +164,20 @@ bool same_volume(const fs::path& a, const fs::path& b)
 
 #endif
 
-// Median time of random block reads from `path` (0 if it could not be read).
-double median_read_ms(const fs::path& path, std::uint64_t size, std::size_t& reads)
+struct ReadTimes {
+    double median_ms = 0;
+    double slow_ms = 0;   // 90th percentile
+    std::size_t reads = 0;
+};
+
+// Times random block reads from `path` (all zero if it could not be read).
+// The places differ on every run, so an earlier probe has not left them in a cache.
+ReadTimes time_reads(const fs::path& path, std::uint64_t size)
 {
     UncachedFile file(path);
-    if (!file.is_open() || size < 2 * kBlock) return 0;
+    if (!file.is_open() || size < 2 * kBlock) return {};
     auto block = std::make_unique<Block>();
-    std::mt19937_64 random(1);
+    std::mt19937_64 random(std::random_device{}() ^ static_cast<std::uint64_t>(Clock::now().time_since_epoch().count()));
     std::uniform_int_distribution<std::uint64_t> pick(0, size / kBlock - 1);
     std::vector<double> times;
     const auto start = Clock::now();
@@ -175,14 +185,57 @@ double median_read_ms(const fs::path& path, std::uint64_t size, std::size_t& rea
         const auto elapsed = Clock::now() - start;
         if (elapsed >= kMaxTime || (elapsed >= kMinTime && times.size() >= kMinReads)) break;
         const auto before = Clock::now();
-        if (!file.read_at(pick(random) * kBlock, *block)) return 0;
+        if (!file.read_at(pick(random) * kBlock, *block)) return {};
         times.push_back(std::chrono::duration<double, std::milli>(Clock::now() - before).count());
     }
-    reads = times.size();
-    if (times.empty()) return 0;
-    const auto middle = times.begin() + static_cast<std::ptrdiff_t>(times.size() / 2);
-    std::nth_element(times.begin(), middle, times.end());
-    return *middle;
+    if (times.empty()) return {};
+    std::ranges::sort(times);
+    ReadTimes out;
+    out.reads = times.size();
+    out.median_ms = times[times.size() / 2];
+    out.slow_ms = times[std::min(times.size() - 1, times.size() * 9 / 10)];
+    return out;
+}
+
+// A file of the right size that was not written lately, so no cache holds it.
+bool readable_candidate(const fs::path& path, std::uint64_t& size)
+{
+    std::error_code error;
+    size = fs::file_size(path, error);
+    if (error || size < kMinFileBytes) return false;
+    const auto written = fs::last_write_time(path, error);
+    return !error && fs::file_time_type::clock::now() - written >= kUntouchedFor;
+}
+
+// An existing file on the output's volume to read instead of a fresh test file:
+// one in the output folder (from an earlier run), or near it. Gives up after a
+// few thousand folder entries.
+fs::path find_untouched_file(const fs::path& output_root, std::uint64_t& size)
+{
+    std::error_code error;
+    const auto start = Clock::now();
+    std::size_t entries = 0;
+    fs::path folder = fs::absolute(output_root, error).lexically_normal();
+    fs::path walked;   // the folder below `folder` that was already looked through
+    while (!folder.empty()) {
+        fs::recursive_directory_iterator it(folder, fs::directory_options::skip_permission_denied, error);
+        for (; !error && it != fs::recursive_directory_iterator(); it.increment(error)) {
+            if (++entries > kSearchEntries || Clock::now() - start > kSearchTime) return {};
+            std::error_code type_error;
+            if (it->is_directory(type_error)) {
+                if (it->path() == walked || it->is_symlink(type_error) || !same_volume(it->path(), output_root)) {
+                    it.disable_recursion_pending();
+                }
+            } else if (it->is_regular_file(type_error) && readable_candidate(it->path(), size)) {
+                return it->path();
+            }
+        }
+        error.clear();
+        if (!folder.has_parent_path() || folder.parent_path() == folder || !same_volume(folder.parent_path(), output_root)) break;
+        walked = folder;
+        folder = folder.parent_path();
+    }
+    return {};
 }
 
 } // namespace
@@ -197,10 +250,10 @@ const char* name_of(DiskKind kind) noexcept
     return "unknown disk";
 }
 
-DiskKind classify(double median_read_ms) noexcept
+DiskKind classify(double slow_read_ms) noexcept
 {
-    if (!(median_read_ms > 0)) return DiskKind::unknown;
-    return median_read_ms >= kHddReadMs ? DiskKind::hdd : DiskKind::ssd;
+    if (!(slow_read_ms > 0)) return DiskKind::unknown;
+    return slow_read_ms >= kHddReadMs ? DiskKind::hdd : DiskKind::ssd;
 }
 
 DiskProbe probe_disk(const fs::path& output_root, const std::vector<fs::path>& archives)
@@ -210,34 +263,47 @@ DiskProbe probe_disk(const fs::path& output_root, const std::vector<fs::path>& a
 
     // Writing: a test file in the output folder, flushed to the disk. Shown, not
     // used for the decision (caches make it vary too much); it is also read
-    // below when no archive can be.
+    // below when nothing else can be.
     const fs::path test_file = output_root / kTestFileName;
     const auto write_started = Clock::now();
     const bool wrote = write_test_file(test_file, kTestFileBytes);
     const double write_seconds = std::chrono::duration<double>(Clock::now() - write_started).count();
     if (wrote && write_seconds > 0) probe.write_mb_per_s = static_cast<double>(kTestFileBytes) / write_seconds / 1e6;
 
-    // The largest archive on the output's volume, if one is big enough.
+    const auto measure = [&probe](const fs::path& path, std::uint64_t size, const char* what) {
+        const ReadTimes times = time_reads(path, size);
+        probe.median_read_ms = times.median_ms;
+        probe.slow_read_ms = times.slow_ms;
+        probe.reads = times.reads;
+        probe.read_from = what;
+        return times.reads > 0;
+    };
+
+    // 1. The largest archive, if it is on the output's volume and nobody wrote it lately.
     fs::path largest;
     std::uint64_t largest_size = 0;
     for (const fs::path& archive : archives) {
         const std::uint64_t size = fs::file_size(archive, error);
         if (!error && size > largest_size) largest = archive, largest_size = size;
     }
-    if (largest_size >= kMinArchiveBytes && same_volume(largest, output_root)) {
-        probe.median_read_ms = median_read_ms(largest, largest_size, probe.reads);
-        probe.read_from = "an archive";
+    bool measured = false;
+    std::uint64_t size = 0;
+    if (!largest.empty() && same_volume(largest, output_root) && readable_candidate(largest, size)) {
+        measured = measure(largest, size, "an archive");
     }
-    if (!(probe.median_read_ms > 0)) {
-        if (wrote) {
-            probe.median_read_ms = median_read_ms(test_file, kTestFileBytes, probe.reads);
-            probe.read_from = "a test file";
-        } else {
-            probe.problem = "cannot write a test file into the output folder";
-        }
+    // 2. Some other file there that nobody wrote lately.
+    if (!measured) {
+        const fs::path other = find_untouched_file(output_root, size);
+        if (!other.empty()) measured = measure(other, size, "an existing file");
+    }
+    // 3. The test file. Just written, so a disk's or a virtual machine's cache may
+    //    still hold part of it; the 90th percentile still sees the rest.
+    if (!measured) {
+        if (wrote) measured = measure(test_file, kTestFileBytes, "the test file");
+        else probe.problem = "cannot write a test file into the output folder";
     }
     fs::remove(test_file, error);
-    probe.kind = classify(probe.median_read_ms);
+    probe.kind = classify(probe.slow_read_ms);
     if (probe.kind == DiskKind::unknown && probe.problem.empty()) probe.problem = "cannot read uncached";
     return probe;
 }

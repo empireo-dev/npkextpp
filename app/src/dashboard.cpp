@@ -77,9 +77,10 @@ Element disk_test(const npk::pipeline::DiskProbe& probe)
 {
     using npk::pipeline::DiskKind;
     Elements lines;
-    std::string reads = probe.median_read_ms > 0
-                            ? fmt("%.2f ms", probe.median_read_ms) + " median of " + std::to_string(probe.reads) +
-                                  " random 4 KiB reads (" + probe.read_from + ")"
+    std::string reads = probe.reads > 0
+                            ? "half under " + fmt("%.2f ms", probe.median_read_ms) + ", 9 in 10 under " +
+                                  fmt("%.2f ms", probe.slow_read_ms) + " (" + std::to_string(probe.reads) +
+                                  " random 4 KiB reads of " + probe.read_from + ")"
                             : "could not be measured";
     std::string writes = probe.write_mb_per_s > 0 ? fmt("%.0f MB/s", probe.write_mb_per_s) + " (16 MiB, flushed)"
                                                   : "could not be measured";
@@ -89,8 +90,8 @@ Element disk_test(const npk::pipeline::DiskProbe& probe)
                        : probe.kind == DiskKind::ssd ? "SSD"
                                                      : "unknown (" + probe.problem + "), tuning as for an SSD";
     std::string why = probe.kind == DiskKind::unknown ? ""
-                      : probe.kind == DiskKind::hdd   ? "  (reads of 1 ms or more)"
-                                                      : "  (reads under 1 ms)";
+                      : probe.kind == DiskKind::hdd   ? "  (1 read in 10 took 1 ms or more)"
+                                                      : "  (9 reads in 10 took under 1 ms)";
     lines.push_back(hbox({text("              "), text("Assuming drive type: "), text(kind) | bold | color(Color::Cyan),
                           text(why) | dim}));
     return vbox(std::move(lines));

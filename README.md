@@ -25,8 +25,10 @@ npkext's (0 ok, 1 some entries failed, 2 bad input, 130 interrupted), plus:
 - `--scan` looks for archives in the whole installation. Without it, the app only
   checks which archives of the game's known list
   ([core/data/known_archives.txt](core/data/known_archives.txt), compiled in) are
-  there, and lists the others as missing. While no archive of that list is found
-  (the list is still empty), it scans on its own.
+  there, and lists the others as missing. The list has the 689 archives of the
+  game as of November 2026. While no archive of that list is found (another game
+  version), it scans on its own. Folders of the installation that cannot be
+  opened (permission denied) are named in a warning, as is a missing name manifest.
 - `--overwrite` writes every file again. Without it, files already in the output
   folder with the right size are kept, so a second run, or one after an
   interrupted run, writes only what is missing.
@@ -35,7 +37,7 @@ What the screen shows, in a terminal (redrawn every 50 ms, drawn with
 [FTXUI](third_party/README.md)):
 
 1. the name in a box, then the installation, the archives found, the names and the plan;
-2. the disk test: the median of random 4 KiB reads and the write speed, and the
+2. the disk test: how long random 4 KiB reads took (half of them, and 9 in 10) and the write speed, and the
    drive type assumed from them (SSD or HDD), which decides how the tuner searches;
 3. **Pipeline:** the reading buffer size and the number of writers as the tuner
    sets them, and for the reader, the decoders and the writers the share of the
