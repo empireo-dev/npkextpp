@@ -545,9 +545,9 @@ int run_update(const UpdateOptions& update, Console& console)
         console.line("File          " + shown + " (id " + hex8(found.id) + ")" +
                      (shown == slashes(*update.path) ? "" : ", found from " + *update.path));
         const std::vector<std::byte> content = unwrap(npk::InputFile::read_all(*update.new_file));
-        console.line("New version   " + npk::to_utf8(*update.new_file) + " (" + format_bytes(content.size()) + ", " +
-                     "stored like the old one)");
+        console.line("New version   " + npk::to_utf8(*update.new_file) + " (" + format_bytes(content.size()) + ")");
         const npk::ReplaceResult result = unwrap(npk::replace_entry(update.target, found.id, content));
+        console.line("Stored as     " + compression_name(result.files.front().after) + ", like the old version");
         show_replaced(console, result, {shown});
         return kExitOk;
     }
