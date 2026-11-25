@@ -13,7 +13,15 @@ inline constexpr int kExitEntriesFailed = 1;
 inline constexpr int kExitBadInput = 2;
 inline constexpr int kExitInterrupted = 130;
 
+// npkextpp update --new FILE --path PATH --target ARCHIVE
+struct UpdateOptions {
+    std::filesystem::path new_file;   // the new version
+    std::string path;                 // its path in the archive
+    std::filesystem::path target;     // the archive to change
+};
+
 struct CliOptions {
+    std::optional<UpdateOptions> update;            // the update command was given
     std::optional<std::filesystem::path> install;   // game installation root
     std::vector<std::string> inputs;                // --in: archive paths / names / paths inside the installation
     std::vector<std::filesystem::path> resdb;       // --resdb: manifests to use instead of the installation's

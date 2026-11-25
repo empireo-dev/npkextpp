@@ -25,6 +25,8 @@ add_library(npk_core STATIC
     src/input_file.cpp
     src/archive.cpp
     src/decoder.cpp
+    src/encoder.cpp
+    src/archive_update.cpp
     src/filetypes.cpp
     src/resdb.cpp
     src/mounts.cpp

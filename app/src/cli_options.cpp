@@ -34,6 +34,9 @@ examples:
   # archives given by their file path
   npkextpp --in path/to/res/model/texture.npk --out unpacked
   npkextpp --in copy/ui.npk --resdb path/to/res/resdb --out unpacked
+
+  # replace one file inside an archive with a new version
+  npkextpp update --new my_bg.png --path login/bg.png --target "path/to/Magic Awakened/res/ui.npk"
 )";
 
 } // namespace
@@ -87,6 +90,16 @@ std::optional<CliOptions> parse_cli(int argc, char** argv, int& exit_code)
     app.add_flag("-v,--verbose", options.verbose, "print the tuner's decisions and other details")->group(other);
     app.add_flag("--licenses", options.show_licenses, "show the licenses of the bundled libraries")->group(other);
 
+    UpdateOptions update;
+    CLI::App* update_command = app.add_subcommand(
+        "update", "replace a file inside an archive with a new version (the archive is changed in place: keep a copy)");
+    update_command->add_option("--new", update.new_file, "the new version of the file")->required()->check(CLI::ExistingFile);
+    update_command->add_option("--path", update.path,
+                               "its path in the archive (login/bg.png in ui.npk; res/ui/login/bg.png works too)")
+        ->required();
+    update_command->add_option("--target", update.target, "the archive to change")->required()->check(CLI::ExistingFile);
+    app.require_subcommand(0, 1);
+
     try {
         app.parse(argc, argv);
     } catch (const CLI::ParseError& error) {
@@ -95,6 +108,7 @@ std::optional<CliOptions> parse_cli(int argc, char** argv, int& exit_code)
         return std::nullopt;
     }
     options.verify = !no_verify;
+    if (update_command->parsed()) options.update = update;
     exit_code = kExitOk;
     return options;
 }

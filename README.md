@@ -33,6 +33,21 @@ npkext's (0 ok, 1 some entries failed, 2 bad input, 130 interrupted), plus:
   folder with the right size are kept, so a second run, or one after an
   interrupted run, writes only what is missing.
 
+### Replacing a file inside an archive
+
+    npkextpp update --new my_bg.png --path login/bg.png --target "path/to/Magic Awakened/res/ui.npk"
+
+`--path` is the file's path in the archive. A path that starts with folders
+above it works too (`res/ui/login/bg.png`, as in the unpacked folder): the
+longest tail of it that is in the archive is used. It is case-sensitive, like
+the game's ids. A file that is not in the archive is an error.
+
+The new version is compressed and scrambled the way the old one was. If it fits
+where the old one was, it is written over it; if not, it goes at the end of the
+archive and the table of contents after it (nothing else moves). The file is
+then read back and compared. The archive is changed in place and an interrupted
+write damages it, so keep a copy of an archive you cannot download again.
+
 What the screen shows, in a terminal (redrawn every 50 ms, drawn with
 [FTXUI](third_party/README.md)):
 

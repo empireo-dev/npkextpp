@@ -9,7 +9,9 @@
 #include "dashboard.hpp"
 #include "licenses.hpp"
 
+#include "npk/archive_update.hpp"
 #include "npk/decoder.hpp"
+#include "npk/input_file.hpp"
 #include "npk/inputs.hpp"
 #include "npk/install.hpp"
 #include "npk/names.hpp"
@@ -477,6 +479,46 @@ int run(const CliOptions& options, Console& console)
     return (summary.files_failed > 0 || summary.index_error) ? kExitEntriesFailed : kExitOk;
 }
 
+std::string compression_name(const npk::Entry& entry)
+{
+    std::string name;
+    switch (entry.compression()) {
+    case npk::Compression::none: name = "stored"; break;
+    case npk::Compression::zlib: name = "zlib"; break;
+    case npk::Compression::lz4: name = "LZ4"; break;
+    case npk::Compression::zstd: name = "zstd"; break;
+    default: name = "mode " + std::to_string(entry.flags & 0xFFu); break;
+    }
+    return name + (entry.encrypted() ? ", scrambled" : "");
+}
+
+// npkextpp update: one file of one archive replaced by a new version.
+int run_update(const UpdateOptions& update, Console& console)
+{
+    console.print(logo(NPKEXTPP_VERSION));
+    console.line("Archive       " + npk::to_utf8(update.target));
+    const npk::FoundEntry found = unwrap(npk::find_entry(update.target, update.path));
+    std::string shown = found.inner_path;
+    std::ranges::replace(shown, '\\', '/');
+    std::string wanted = update.path;
+    std::ranges::replace(wanted, '\\', '/');
+    console.line("File          " + shown + " (id " + hex8(found.id) + ")" +
+                 (shown == wanted ? "" : ", found from " + update.path));
+
+    const std::vector<std::byte> content = unwrap(npk::InputFile::read_all(update.new_file));
+    console.line("New version   " + npk::to_utf8(update.new_file) + " (" + format_bytes(content.size()) + ")");
+    const npk::Replacement done = unwrap(npk::replace_entry(update.target, found.id, content));
+
+    console.line("Replaced      " + format_bytes(done.before.raw_size) + " -> " + format_bytes(done.after.raw_size) +
+                 " (stored " + format_bytes(done.before.packed_size) + " -> " + format_bytes(done.after.packed_size) +
+                 ", " + compression_name(done.after) + ")");
+    console.line(done.in_place ? "              written over the old version; the archive stays " + format_bytes(done.size_after)
+                               : "              too big for the old place: written at the end, the archive grew from " +
+                                     format_bytes(done.size_before) + " to " + format_bytes(done.size_after));
+    console.line("Checked       read back from the archive: identical to the new version");
+    return kExitOk;
+}
+
 } // namespace
 
 int main(int argc, char** argv)
@@ -493,6 +535,7 @@ int main(int argc, char** argv)
 
     Console console;
     try {
+        if (options.update) return run_update(*options.update, console);
         return run(options, console);
     } catch (const InputError& error) {
         console.error(error.what());

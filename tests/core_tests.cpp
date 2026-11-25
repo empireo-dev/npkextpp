@@ -2,6 +2,8 @@
 #include "test_support.hpp"
 
 #include "npk/archive.hpp"
+#include "npk/encoder.hpp"
+#include "npk/archive_update.hpp"
 #include "npk/decoder.hpp"
 #include "npk/filetypes.hpp"
 #include "npk/hash.hpp"
@@ -694,6 +696,87 @@ TEST(a_copy_of_a_nested_archive_gets_its_names)
     CHECK(written.contains("hero/body.mesh"));
     CHECK(written.contains("hero/skin.png"));
     CHECK_EQ(plan.totals.unnamed, 1u);
+}
+
+TEST(encoded_entries_decode_to_the_original)
+{
+    const Bytes content = random_bytes(5000, 3);
+    npk::Decoder decoder;
+    for (const npk::Compression mode : {npk::Compression::none, npk::Compression::zlib, npk::Compression::lz4,
+                                        npk::Compression::zstd}) {
+        for (const bool scrambled : {false, true}) {
+            const std::uint32_t flags = static_cast<std::uint32_t>(mode) | (scrambled ? npk::Entry::kEncryptedFlag : 0u);
+            auto stored = npk::encode(content, flags);
+            CHECK(stored.has_value());
+            if (!stored) continue;
+            const npk::Entry entry = npk::make_entry(1, 0x18, content, *stored, flags);
+            Bytes out(content.size());
+            CHECK(decoder.decode(*stored, entry, out, true).has_value());
+            CHECK(out == content);
+        }
+    }
+}
+
+namespace {
+
+// Every file of the archive, decoded, by id.
+std::map<std::uint32_t, Bytes> archive_files(const fs::path& path)
+{
+    std::map<std::uint32_t, Bytes> files;
+    auto archive = npk::Archive::open(path);
+    if (!archive) return files;
+    npk::Decoder decoder;
+    for (const npk::Entry& entry : archive->entries()) {
+        auto content = decoder.read(*archive, entry, true);
+        files[entry.id] = content ? *content : bytes("<broken>");
+    }
+    return files;
+}
+
+} // namespace
+
+TEST(a_file_is_replaced_in_place_or_at_the_end)
+{
+    TempDir dir;
+    const fs::path path = write_npk(dir.path() / "ui.npk", {{"login\\bg.png", random_bytes(3000, 1, false)},
+                                                            {"icons\\a.png", random_bytes(800, 2), npk::Compression::zlib},
+                                                            {"icons\\b.png", random_bytes(500, 4), npk::Compression::none, false}});
+    auto expected = archive_files(path);
+    const auto size = fs::file_size(path);
+
+    // Smaller than the old version: written over it, the archive keeps its size.
+    const Bytes small = repeat("SMALL", 20);
+    auto first = npk::replace_entry(path, npk::path_id("login\\bg.png"), small);
+    CHECK(first.has_value() && first->in_place);
+    CHECK_EQ(fs::file_size(path), size);
+    expected[npk::path_id("login\\bg.png")] = small;
+    CHECK(archive_files(path) == expected);
+
+    // Larger: written where the table was, the table after it.
+    const Bytes large = random_bytes(4000, 9, false);
+    auto second = npk::replace_entry(path, npk::path_id("icons\\b.png"), large);
+    CHECK(second.has_value() && !second->in_place);
+    CHECK(second->after.offset % 4 == 0);
+    CHECK(second->after.compression() == npk::Compression::none && !second->after.encrypted());   // as before
+    CHECK(fs::file_size(path) > size);
+    expected[npk::path_id("icons\\b.png")] = large;
+    CHECK(archive_files(path) == expected);
+
+    // Not in the archive.
+    auto missing = npk::replace_entry(path, npk::path_id("icons\\c.png"), small);
+    CHECK(!missing && missing.error().code == npk::Errc::not_found);
+}
+
+TEST(a_file_is_found_by_any_path_ending_in_its_inner_path)
+{
+    TempDir dir;
+    const fs::path path = write_npk(dir.path() / "ui.npk", {{"login\\bg.png", bytes("x")}});
+    for (const char* given : {"login\\bg.png", "login/bg.png", "ui/login/bg.png", "res/ui/login/bg.png", "/login/bg.png"}) {
+        auto found = npk::find_entry(path, given);
+        CHECK(found.has_value() && found->inner_path == "login\\bg.png" && found->id == npk::path_id("login\\bg.png"));
+    }
+    CHECK(!npk::find_entry(path, "login/BG.png"));   // the game's ids are case-sensitive
+    CHECK(!npk::find_entry(path, "bg.png"));
 }
 
 TEST(unreadable_archives_are_listed_not_fatal)
