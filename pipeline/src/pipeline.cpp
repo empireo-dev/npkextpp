@@ -133,7 +133,7 @@ Summary run(Plan& plan, const Options& options, Progress& progress, std::stop_to
         std::stop_source tuner_stop;
         std::stop_callback stop_tuner(ctx.stop.get_token(), [&tuner_stop] { tuner_stop.request_stop(); });
         std::jthread tuner_thread;
-        if (options.adaptive) tuner_thread = std::jthread([&] { tuner.run(tuner_stop.get_token()); });
+        if (options.adaptive || !options.writer_schedule.empty() || options.trace) tuner_thread = std::jthread([&] { tuner.run(tuner_stop.get_token()); });
 
         std::jthread reader_thread([&reader] { reader.run(); });
         reader_thread.join();

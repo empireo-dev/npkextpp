@@ -123,6 +123,8 @@ tune_sim --install DIR [--in NAME...] --disk ssd|hdd [--set name=value ...]
          [--writers N]       fixed writer count, no tuner
          [--repeat N]        go through the archives N times, for runs long enough to tune
          [--decoders N]
+         [--schedule N N ... [--period S]]   cycle through fixed writer counts, S seconds each
+         [--trace]           print the tuner's raw readings every 0.5 s
 tune_sim --disk ssd|hdd --curve --file-size BYTES [--seconds S] [--set ...]
 ```
 

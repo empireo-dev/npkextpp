@@ -12,6 +12,7 @@
 #include <optional>
 #include <stop_token>
 #include <string_view>
+#include <vector>
 
 namespace npk::pipeline {
 
@@ -30,6 +31,12 @@ struct Options {
     // Tests only: writers hand file sizes to this instead of writing files, and
     // no output folders are created. See docs/simulated_disk.md.
     FakeDisk* fake_disk = nullptr;
+    // Tests only: instead of tuning, cycle through these writer counts, each for
+    // `schedule_period` seconds.
+    std::vector<unsigned> writer_schedule;
+    double schedule_period = 10;
+    // Tests only: log a "trace" line with the tuner's raw readings every window.
+    bool trace = false;
 
     // Tuner decisions and other details, one line each, from a pipeline thread.
     std::function<void(std::string_view)> log;

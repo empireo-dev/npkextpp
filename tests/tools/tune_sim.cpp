@@ -101,6 +101,12 @@ int main(int argc, char** argv)
     app.add_flag("--curve", curve_mode, "measure the disk alone for 1..32 writers");
     app.add_option("--file-size", file_size, "file size for --curve");
     app.add_option("--seconds", seconds, "seconds per writer count for --curve");
+    std::vector<unsigned> schedule;
+    double period = 10;
+    bool trace = false;
+    app.add_option("--schedule", schedule, "cycle through these writer counts instead of tuning");
+    app.add_option("--period", period, "seconds per --schedule step");
+    app.add_flag("--trace", trace, "print the tuner's raw readings every 0.5 s");
     CLI11_PARSE(app, argc, argv);
 
     npk::sim::DiskParams params = disk_name == "hdd" ? npk::sim::hdd() : npk::sim::ssd();
@@ -154,6 +160,13 @@ int main(int argc, char** argv)
         options.adaptive = false;
         options.initial_writers = writers;
     }
+    if (!schedule.empty()) {
+        options.adaptive = false;
+        options.writer_schedule = schedule;
+        options.schedule_period = period;
+        options.initial_writers = schedule.front();
+    }
+    options.trace = trace;
     const auto start = std::chrono::steady_clock::now();
     std::mutex print_mutex;
     options.log = [&](std::string_view line) {
@@ -167,7 +180,7 @@ int main(int argc, char** argv)
     std::jthread reporter([&] {
         std::uint64_t bytes = 0, files = 0;
         double last = 0;
-        while (!done) {
+        while (!done && !trace) {
             for (int i = 0; i < 50 && !done; ++i) std::this_thread::sleep_for(std::chrono::milliseconds(100));
             const double now = since(start);
             const std::uint64_t b = progress.bytes_written.load(), f = progress.files_written.load();

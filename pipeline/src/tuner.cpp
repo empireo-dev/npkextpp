@@ -88,8 +88,46 @@ void Tuner::set_writers(unsigned count)
     writers_.allowed_changed();
 }
 
+void Tuner::trace(const Sample& now, const Sample& previous) const
+{
+    const StageTimes reader = now.reader - previous.reader;
+    const StageTimes decoders = now.decoders - previous.decoders;
+    const StageTimes writers = now.writers - previous.writers;
+    const auto s = [](std::int64_t ns) { return static_cast<double>(ns) / kSecond; };
+    ctx_.log(format("trace %.3f %u %llu %llu %.3f %.3f %.3f %.3f %.3f",
+                    s(now.at_ns - previous.at_ns), ctx_.tunables.writers_allowed.load(std::memory_order_relaxed),
+                    static_cast<unsigned long long>(now.bytes - previous.bytes),
+                    static_cast<unsigned long long>(now.files - previous.files), s(writers[StageState::working]),
+                    s(writers[StageState::waiting_input]), s(decoders[StageState::working]),
+                    s(decoders[StageState::waiting_output]), reader.busy()));
+}
+
 void Tuner::run(std::stop_token stop)
 {
+    if (!ctx_.options.writer_schedule.empty() || !ctx_.options.adaptive) {   // tests: follow a schedule, or only trace
+        const auto& schedule = ctx_.options.writer_schedule;
+        Sample previous = take();
+        const std::int64_t start = previous.at_ns;
+        std::mutex sleep_mutex;
+        std::condition_variable_any sleeper;
+        while (!stop.stop_requested()) {
+            if (!schedule.empty()) {
+                const auto slot = static_cast<std::size_t>(static_cast<double>(previous.at_ns - start) / kSecond /
+                                                           ctx_.options.schedule_period);
+                const unsigned wanted = schedule[slot % schedule.size()];
+                if (wanted != ctx_.tunables.writers_allowed.load(std::memory_order_relaxed)) set_writers(wanted);
+            }
+            {
+                std::unique_lock lock(sleep_mutex);
+                sleeper.wait_for(lock, stop, kWindow, [] { return false; });
+            }
+            const Sample now = take();
+            if (ctx_.options.trace) trace(now, previous);
+            previous = now;
+        }
+        return;
+    }
+
     // A probe is measured before -> after -> before again, and the "after" is
     // compared with both "before" periods together. A slow change in conditions
     // (the start-up fill, a different kind of archive) then shows up as variation
@@ -137,6 +175,7 @@ void Tuner::run(std::stop_token stop)
         const Sample now = take();
         const double seconds = static_cast<double>(now.at_ns - previous.at_ns) / kSecond;
         if (seconds <= 0) continue;
+        if (ctx_.options.trace) trace(now, previous);
         const StageTimes reader = now.reader - previous.reader;
         const StageTimes decoders = now.decoders - previous.decoders;
         const StageTimes writers = now.writers - previous.writers;

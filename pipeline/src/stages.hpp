@@ -107,6 +107,7 @@ private:
     };
     [[nodiscard]] Sample take() const;
     void set_writers(unsigned count);
+    void trace(const Sample& now, const Sample& previous) const;
 
     Context& ctx_;
     const Reader& reader_;
