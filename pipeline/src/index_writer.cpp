@@ -87,7 +87,8 @@ Outcome outcome_of(const PlannedEntry& planned, const Plan& plan)
                                      : std::string();
     if (planned.disposition == Disposition::skip) return {"overridden", "", replaced};
     switch (planned.status) {
-    case EntryStatus::written: return {replaced.empty() ? "ok" : "overridden", planned.path, replaced};
+    case EntryStatus::written:
+    case EntryStatus::existing: return {replaced.empty() ? "ok" : "overridden", planned.path, replaced};
     case EntryStatus::failed: return {"failed", "", planned.error};
     case EntryStatus::pending: break;
     }

@@ -49,21 +49,22 @@ void DecoderPool::run(StageClock& clock)
 
             WriteJob job;
             job.planned = &planned;
+            job.source_index = chunk.source_index;
 
             if (entry.compression() == Compression::none && entry.raw_size > 0 && !item.shared) {
                 // Stored as is: check and decrypt in place, write straight from the chunk.
                 if (verify && murmur3_32(stored) != entry.crc_packed) {
-                    ctx_.fail(planned, "stored data is damaged (crc_packed does not match)");
+                    ctx_.fail(planned, "stored data is damaged (crc_packed does not match)", chunk.source_index);
                     continue;
                 }
                 if (entry.encrypted()) decrypt(stored);
                 if (stored.size() != entry.raw_size) {
                     ctx_.fail(planned, "decoded " + std::to_string(stored.size()) + " bytes, expected " +
-                                           std::to_string(entry.raw_size));
+                                           std::to_string(entry.raw_size), chunk.source_index);
                     continue;
                 }
                 if (verify && murmur3_32(stored) != entry.crc_raw) {
-                    ctx_.fail(planned, "decoded data is wrong (crc_raw does not match)");
+                    ctx_.fail(planned, "decoded data is wrong (crc_raw does not match)", chunk.source_index);
                     continue;
                 }
                 job.data = stored;
@@ -84,13 +85,14 @@ void DecoderPool::run(StageClock& clock)
                 job.owned = std::make_unique_for_overwrite<std::byte[]>(entry.raw_size);
                 const std::span<std::byte> out(job.owned.get(), entry.raw_size);
                 if (auto decoded = decoder.decode(stored, entry, out, verify); !decoded) {
-                    ctx_.fail(planned, decoded.error().message);
+                    ctx_.fail(planned, decoded.error().message, chunk.source_index);
                     continue;   // the job (and its budget) goes away here
                 }
                 job.data = out;
             }
 
             job.path = output_path(planned, job.data);
+            ctx_.progress.files_decoded.fetch_add(1, std::memory_order_relaxed);
             clock.enter(StageState::waiting_output);
             const bool pushed = ctx_.write_queue.push(std::move(job), stop);
             clock.enter(StageState::working);
@@ -100,7 +102,10 @@ void DecoderPool::run(StageClock& clock)
     }
 
     clock.enter(StageState::waiting_input);
-    if (running_.fetch_sub(1) == 1) ctx_.write_queue.close();   // the last decoder out closes the queue
+    if (running_.fetch_sub(1) == 1) {   // the last decoder out closes the queue
+        ctx_.write_queue.close();
+        ctx_.progress.decoding_done.store(true, std::memory_order_relaxed);
+    }
 }
 
 } // namespace npk::pipeline

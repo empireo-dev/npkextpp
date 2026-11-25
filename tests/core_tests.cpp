@@ -452,6 +452,71 @@ TEST(resolve_inputs)
 
 // --- Installation -------------------------------------------------------------------------
 
+TEST(known_archive_list_is_checked_instead_of_scanning)
+{
+    TempDir dir;
+    const fs::path root = fake_install(dir.path());
+    const auto known = strings({"res/ui.npk", "res/model/hero.npk", "res/gone.npk", "Documents/res/ui.npk"});
+
+    const auto listed = npk::Installation::open(root, npk::ArchiveSearch::known, known);
+    CHECK(listed.has_value());
+    CHECK(!listed->scanned());
+    CHECK_EQ(listed->known_count(), 4u);
+    CHECK_EQ(listed->archives().size(), 3u);   // res.npk and the scripts are not on the list: not looked for
+    CHECK(listed->missing_archives() == strings({"res/gone.npk"}));
+
+    const auto scanned = npk::Installation::open(root, npk::ArchiveSearch::scan, known);
+    CHECK(scanned && scanned->scanned() && scanned->archives().size() == 6u && scanned->missing_archives().empty());
+
+    // None of the list is here (an empty list, another game version): scan after all.
+    const auto unknown = npk::Installation::open(root, npk::ArchiveSearch::known, strings({"res/other.npk"}));
+    CHECK(unknown && unknown->scanned() && unknown->archives().size() == 6u && unknown->missing_archives().empty());
+}
+
+TEST(files_already_in_the_output_are_left_out_of_the_plan)
+{
+    TempDir dir;
+    const fs::path root = fake_install(dir.path());
+    char unnamed[64];
+    std::snprintf(unnamed, sizeof unnamed, "res/ui/_unnamed/%08x", npk::path_id("unlisted.xml"));
+
+    // On disk: one file complete, one cut short (an interrupted run), the unnamed one with its extension.
+    const fs::path out = dir.path() / "out";
+    const auto put = [&](const std::string& relative, std::size_t size) {
+        fs::create_directories((out / relative).parent_path());
+        std::ofstream(out / relative, std::ios::binary) << std::string(size, 'x');
+    };
+    put("res/ui/icons/a.png", 300);
+    put("res/model/hero/body.mesh", 3);
+    put("res/ui/login/bg.png.bak", 150);
+    put(std::string(unnamed) + ".xml", 0);   // size fixed below, once the plan says it
+    put("_archives/index.csv", 10);          // the index is not output
+
+    npk::ResourceManifest manifest;
+    std::optional<npk::Installation> installation;
+    const npk::Plan fresh = plan_install(root, {}, manifest, installation);
+    const auto& documents_ui = *source_labelled(*group_named(fresh, "res/ui"), "Documents/res/ui.npk");
+    const std::size_t unnamed_size = documents_ui.entry(*planned_entry(documents_ui, "unlisted.xml")).raw_size;
+    put(std::string(unnamed) + ".xml", unnamed_size);
+
+    const npk::ExistingFiles existing = npk::ExistingFiles::scan(out);
+    CHECK_EQ(existing.size(), 4u);
+    npk::PlanOptions options;
+    options.existing = &existing;
+    const npk::Plan plan = plan_install(root, options, manifest, installation);
+
+    const auto& ui = *group_named(plan, "res/ui");
+    const auto* icon = planned_entry(*source_labelled(ui, "res/ui.npk"), "icons\\a.png");
+    CHECK(icon && icon->status == npk::EntryStatus::existing);
+    const auto* unlisted = planned_entry(*source_labelled(ui, "Documents/res/ui.npk"), "unlisted.xml");
+    CHECK(unlisted && unlisted->status == npk::EntryStatus::existing && unlisted->path == std::string(unnamed) + ".xml");
+    const auto* mesh = planned_entry(group_named(plan, "res/model/hero")->sources[0], "body.mesh");
+    CHECK(mesh && mesh->status == npk::EntryStatus::pending);   // wrong size: written again
+    CHECK_EQ(plan.totals.existing, 2u);
+    CHECK_EQ(plan.totals.files_to_write, fresh.totals.files_to_write - 2);
+}
+
+
 TEST(installation_layout)
 {
     TempDir dir;

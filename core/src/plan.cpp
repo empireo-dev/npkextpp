@@ -210,6 +210,66 @@ std::string output_path(const PlannedEntry& entry, std::span<const std::byte> da
     return path;
 }
 
+namespace {
+
+std::string existing_key(std::string_view relative)
+{
+#if defined(_WIN32)
+    return lower_ascii(relative);   // NTFS ignores case
+#else
+    return std::string(relative);
+#endif
+}
+
+} // namespace
+
+ExistingFiles ExistingFiles::scan(const fs::path& output_root)
+{
+    ExistingFiles files;
+    std::error_code error;
+    if (!fs::is_directory(output_root, error)) return files;
+    const fs::path root = long_path(output_root);
+    fs::recursive_directory_iterator it(root, fs::directory_options::skip_permission_denied, error);
+    for (; !error && it != fs::recursive_directory_iterator(); it.increment(error)) {
+        std::error_code entry_error;
+        if (it.depth() == 0 && it->is_directory(entry_error) && it->path().filename() == kIndexFolderName) {
+            it.disable_recursion_pending();   // the index is rewritten anyway
+            continue;
+        }
+        if (!it->is_regular_file(entry_error)) continue;
+        const std::uint64_t size = it->file_size(entry_error);
+        if (entry_error) continue;
+        files.add(to_utf8(it->path().lexically_relative(root)), size);
+    }
+    return files;
+}
+
+void ExistingFiles::add(std::string_view relative, std::uint64_t size)
+{
+    ++count_;
+    // An unnamed file is planned without its extension (it is guessed from the data).
+    const std::size_t slash = relative.rfind('/');
+    const std::string_view folder = slash == std::string_view::npos ? std::string_view{} : relative.substr(0, slash);
+    const bool in_unnamed = folder == kUnnamedFolder || folder.ends_with("/" + std::string(kUnnamedFolder));
+    if (in_unnamed) {
+        const std::size_t dot = relative.rfind('.');
+        if (dot != std::string_view::npos && dot > slash + 1) {
+            files_.insert_or_assign(existing_key(relative.substr(0, dot)), File{size, std::string(relative.substr(dot))});
+            return;
+        }
+    }
+    files_.insert_or_assign(existing_key(relative), File{size, {}});
+}
+
+std::optional<std::string> ExistingFiles::find(std::string_view planned_path, bool unnamed, std::uint64_t size) const
+{
+    const auto it = files_.find(existing_key(planned_path));
+    if (it == files_.end() || it->second.size != size) return std::nullopt;
+    if (!unnamed) return std::string(planned_path);
+    if (it->second.extension.empty()) return std::nullopt;
+    return std::string(planned_path) + it->second.extension;
+}
+
 std::string_view OutputGroup::section() const noexcept
 {
     const auto slash = folder.rfind('/');
@@ -365,7 +425,22 @@ Plan Planner::build(std::span<const fs::path> archives, const PlanOptions& optio
         }
     }
 
-    // 5. Totals and the folders to create.
+    // 5. Files already in the output folder (from an earlier run) are left alone.
+    if (options.existing && options.existing->size() > 0) {
+        for (OutputGroup& group : plan.groups) {
+            for (ArchiveSource& source : group.sources) {
+                for (PlannedEntry& planned : source.entries) {
+                    if (planned.disposition == Disposition::skip) continue;
+                    auto found = options.existing->find(planned.path, planned.unnamed, source.entry(planned).raw_size);
+                    if (!found) continue;
+                    planned.status = EntryStatus::existing;
+                    planned.path = std::move(*found);
+                }
+            }
+        }
+    }
+
+    // 6. Totals and the folders to create.
     std::set<std::string> directories;
     for (const OutputGroup& group : plan.groups) {
         for (const ArchiveSource& source : group.sources) {
@@ -374,6 +449,11 @@ Plan Planner::build(std::span<const fs::path> archives, const PlanOptions& optio
                 if (planned.replaced_by >= 0) plan.totals.overridden += 1;
                 if (planned.disposition == Disposition::skip) continue;
                 const Entry& entry = source.entry(planned);
+                if (planned.status == EntryStatus::existing) {
+                    plan.totals.existing += 1;
+                    plan.totals.existing_bytes += entry.raw_size;
+                    continue;
+                }
                 if (planned.unnamed && planned.disposition == Disposition::write) plan.totals.unnamed += 1;
                 plan.totals.files_to_write += 1;
                 plan.totals.packed_bytes += entry.packed_size;

@@ -24,6 +24,7 @@ struct ChunkEntry {
 struct ReadChunk {
     BudgetLease lease;   // first member: destroyed last, after the buffer is freed
     const ArchiveSource* source = nullptr;
+    std::uint32_t source_index = 0;   // position in plan order
     std::uint64_t file_offset = 0;
     std::size_t size = 0;
     std::unique_ptr<std::byte[]> data;
@@ -46,6 +47,7 @@ struct DecodeTask {
 struct WriteJob {
     BudgetLease lease;                    // output-budget bytes of `owned`; destroyed last
     PlannedEntry* planned = nullptr;
+    std::uint32_t source_index = 0;       // the archive's position in plan order
     std::string path;                     // final path relative to the output folder
     std::span<const std::byte> data;      // into `owned` or into `chunk`
     std::unique_ptr<std::byte[]> owned;   // decoded output

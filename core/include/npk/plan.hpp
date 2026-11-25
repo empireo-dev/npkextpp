@@ -11,6 +11,7 @@
 #include <span>
 #include <string>
 #include <string_view>
+#include <unordered_map>
 #include <utility>
 #include <vector>
 
@@ -31,6 +32,7 @@ namespace npk {
 inline constexpr std::string_view kUnnamedFolder = "_unnamed";
 inline constexpr std::string_view kOverriddenFolder = "_overridden";
 inline constexpr std::string_view kOutsideRecords = "_outside";
+inline constexpr std::string_view kIndexFolderName = "_archives";   // the index (written by npk::pipeline)
 
 // Where one archive belongs: in the game, in the output and in the index.
 struct Location {
@@ -59,6 +61,7 @@ enum class EntryStatus : std::uint8_t {
     pending,
     written,
     failed,
+    existing,   // already in the output folder with the right size (from an earlier run): not rewritten
 };
 
 struct PlannedEntry {
@@ -103,6 +106,8 @@ struct PlanTotals {
     std::uint64_t files_to_write = 0;   // write + write_copy
     std::uint64_t overridden = 0;       // write_copy + skip
     std::uint64_t unnamed = 0;          // of the written ones
+    std::uint64_t existing = 0;         // already in the output folder: not written again
+    std::uint64_t existing_bytes = 0;
     std::uint64_t packed_bytes = 0;     // stored bytes to read for the written ones
     std::uint64_t raw_bytes = 0;        // bytes to write
 };
@@ -117,9 +122,37 @@ struct Plan {
     [[nodiscard]] std::size_t source_count() const noexcept;
 };
 
+// The files already in an output folder, so a second run into it writes only
+// what is not there yet. A file counts when its size is the entry's: a file
+// cut short by an interrupted run is written again.
+class ExistingFiles {
+public:
+    // Every file below `output_root`, except the _archives/ index. Nothing if it doesn't exist.
+    [[nodiscard]] static ExistingFiles scan(const std::filesystem::path& output_root);
+
+    // Adds one file ('/' path relative to the output folder); for tests and scan().
+    void add(std::string_view relative, std::uint64_t size);
+
+    // The path of the file that `entry` (planned at `planned_path`) would be,
+    // if it is there with `size` bytes: planned_path itself, or for an unnamed
+    // entry the file with its guessed extension.
+    [[nodiscard]] std::optional<std::string> find(std::string_view planned_path, bool unnamed, std::uint64_t size) const;
+
+    [[nodiscard]] std::size_t size() const noexcept { return count_; }
+
+private:
+    struct File {
+        std::uint64_t size = 0;
+        std::string extension;   // unnamed files: ".png"; their key has none
+    };
+    std::unordered_map<std::string, File> files_;   // lower case on Windows
+    std::size_t count_ = 0;
+};
+
 struct PlanOptions {
     bool keep_overridden = false;          // also write lower-priority copies
     std::optional<std::size_t> limit;      // only the first N entries (by offset) of each archive
+    const ExistingFiles* existing = nullptr;   // leave out the entries already there (no --overwrite)
 };
 
 // Turns a list of archives into a Plan: reads every table of contents, places

@@ -54,6 +54,7 @@ struct Summary {
     std::uint64_t files_written = 0;
     std::uint64_t files_failed = 0;
     std::uint64_t files_not_reached = 0;   // stopped before they were written
+    std::uint64_t files_existing = 0;      // already in the output folder: left alone
     std::uint64_t bytes_written = 0;
     double seconds = 0;
     bool cancelled = false;                // the caller's stop token fired

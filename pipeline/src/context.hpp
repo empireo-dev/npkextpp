@@ -71,11 +71,22 @@ struct Context {
     BoundedQueue<WriteJob> write_queue{kWriteQueueJobs};
     WritebackTracker writeback;
 
-    void fail(PlannedEntry& entry, std::string message)
+    // `source`: the archive's position in plan order (for Progress::sources()).
+    void fail(PlannedEntry& entry, std::string message, std::uint32_t source)
     {
         entry.status = EntryStatus::failed;
         entry.error = std::move(message);
         progress.files_failed.fetch_add(1, std::memory_order_relaxed);
+        if (SourceProgress* counts = source_progress(source)) {
+            counts->files_failed.fetch_add(1, std::memory_order_relaxed);
+            counts->files_done.fetch_add(1, std::memory_order_relaxed);
+        }
+    }
+
+    [[nodiscard]] SourceProgress* source_progress(std::uint32_t source) noexcept
+    {
+        const auto all = progress.sources();
+        return source < all.size() ? &all[source] : nullptr;
     }
 
     void log(std::string_view line) const

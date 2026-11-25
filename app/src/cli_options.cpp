@@ -11,7 +11,8 @@ constexpr const char* kDescription =
     "<out>/res/, res/ui.npk to <out>/res/ui/, res/model/character.npk to <out>/res/model/character/. "
     "Archives mounted at the same place from several folders (res, res2, Documents/res, ...) are merged, "
     "the higher-priority one winning. <out>/_archives/ records every archive, so they can be rebuilt; "
-    "unpacking more archives later into the same <out> adds to it.";
+    "unpacking more archives later into the same <out> adds to it. Files already in <out> are kept, "
+    "so an interrupted run continues where it stopped (--overwrite writes everything again).";
 
 constexpr const char* kExamples = R"(
 examples:
@@ -56,6 +57,9 @@ std::optional<CliOptions> parse_cli(int argc, char** argv, int& exit_code)
     app.add_option("--resdb", options.resdb, "name manifests to use instead of the installation's")
         ->group(source)
         ->expected(1, -1);
+    app.add_flag("--scan", options.scan,
+                 "look for archives in the whole installation instead of checking the game's known list")
+        ->group(source);
 
     auto* selection = "what to unpack";
     app.add_option("--unpack", options.unpack, "only archives with these names (wildcards allowed). Default: all")
@@ -69,6 +73,9 @@ std::optional<CliOptions> parse_cli(int argc, char** argv, int& exit_code)
 
     auto* output = "where to write";
     app.add_option("--out", options.out, "output folder; archives are unpacked into folders below it")->group(output);
+    app.add_flag("--overwrite", options.overwrite,
+                 "write every file again, also those already in the output folder (default: keep them)")
+        ->group(output);
     app.add_flag("--keep-overridden", options.keep_overridden,
                  "also write lower-priority copies of files, to <folder>/_overridden/<archive>/")
         ->group(output);

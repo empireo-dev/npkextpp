@@ -1,0 +1,5 @@
+// Generated from core/data/known_archives.txt by CMake. Do not edit.
+namespace npk {
+extern const char* const kKnownArchivesText;
+const char* const kKnownArchivesText = R"npk_list(@NPK_KNOWN_ARCHIVES@)npk_list";
+} // namespace npk

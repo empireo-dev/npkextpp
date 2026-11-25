@@ -21,6 +21,8 @@ struct CliOptions {
     std::optional<std::size_t> limit;               // --limit: first N entries of each archive
     std::optional<std::filesystem::path> out;       // output folder
     std::optional<std::string> entry;               // --entry: extract one file by its path in the tree
+    bool scan = false;                              // --scan: walk the installation instead of the built-in list
+    bool overwrite = false;                         // --overwrite: rewrite files already in the output folder
     bool keep_overridden = false;
     bool dry_run = false;
     bool verify = true;

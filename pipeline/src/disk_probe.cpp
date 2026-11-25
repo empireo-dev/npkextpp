@@ -1,4 +1,4 @@
-#include "disk_probe.hpp"
+#include "npk/pipeline/disk_probe.hpp"
 
 #include "npk/paths.hpp"
 
@@ -208,6 +208,15 @@ DiskProbe probe_disk(const fs::path& output_root, const std::vector<fs::path>& a
     DiskProbe probe;
     std::error_code error;
 
+    // Writing: a test file in the output folder, flushed to the disk. Shown, not
+    // used for the decision (caches make it vary too much); it is also read
+    // below when no archive can be.
+    const fs::path test_file = output_root / kTestFileName;
+    const auto write_started = Clock::now();
+    const bool wrote = write_test_file(test_file, kTestFileBytes);
+    const double write_seconds = std::chrono::duration<double>(Clock::now() - write_started).count();
+    if (wrote && write_seconds > 0) probe.write_mb_per_s = static_cast<double>(kTestFileBytes) / write_seconds / 1e6;
+
     // The largest archive on the output's volume, if one is big enough.
     fs::path largest;
     std::uint64_t largest_size = 0;
@@ -220,15 +229,14 @@ DiskProbe probe_disk(const fs::path& output_root, const std::vector<fs::path>& a
         probe.read_from = "an archive";
     }
     if (!(probe.median_read_ms > 0)) {
-        const fs::path test_file = output_root / kTestFileName;
-        if (write_test_file(test_file, kTestFileBytes)) {
+        if (wrote) {
             probe.median_read_ms = median_read_ms(test_file, kTestFileBytes, probe.reads);
             probe.read_from = "a test file";
         } else {
             probe.problem = "cannot write a test file into the output folder";
         }
-        fs::remove(test_file, error);
     }
+    fs::remove(test_file, error);
     probe.kind = classify(probe.median_read_ms);
     if (probe.kind == DiskKind::unknown && probe.problem.empty()) probe.problem = "cannot read uncached";
     return probe;

@@ -244,7 +244,7 @@ window time = a[W] × files written + b × bytes written + c × bytes read
   was being written while each count was measured, so there is no need to go back
   and measure "before" again.
 
-**The kind of disk** (`disk_probe.cpp`). Hard disks and SSDs want different
+**The kind of disk** (`disk_probe.hpp`). Hard disks and SSDs want different
 searches. An SSD gains 2–3× from many writers. A hard disk gains a few percent
 at most, or loses from more writers, and the model's comparisons there are too
 noisy to trust small differences (on a real hard disk, 1, 2 and 4 writers were
@@ -262,6 +262,12 @@ reads that bypass the OS cache (`O_DIRECT` / `FILE_FLAG_NO_BUFFERING`):
   disk: 5–20 ms.
 - If the probe can't run, the disk is tuned as an SSD: too few writers on an SSD
   costs far more than too many on a hard disk.
+- It also times writing the 16 MiB test file (flushed), only to show it: caches
+  make write speeds vary too much to decide on.
+
+The app calls `probe_disk()` itself before the run, shows the readings, and
+passes the result in `Options::disk_kind`; `run()` probes on its own only when
+that is not set.
 
 That picks a profile (`tunables.hpp`):
 
@@ -366,14 +372,30 @@ options.output_root = "out";
 options.verify = true;                // check crc_packed and crc_raw
 options.log = [](std::string_view line) { ... };   // tuner decisions (verbose)
 
-npk::pipeline::Progress progress;     // atomics, read by a UI thread
+options.disk_kind = npk::pipeline::probe_disk(out, archives).kind;   // optional, see §7
+
+npk::pipeline::Progress progress(plan.source_count());   // atomics, read by a UI thread
 std::stop_source stop;                // e.g. Ctrl+C
 npk::pipeline::Summary summary = npk::pipeline::run(plan, options, progress, stop.get_token());
 ```
 
-`Summary` holds the files written, failed and not reached, the bytes, the elapsed
-time, the first fatal error, the tuner's final settings, and whether the index was
-written.
+`Progress` holds the counts and bytes so far, the current read block and writer
+count, one `SourceProgress` per archive in plan order (files done and failed,
+bytes), and for the reader, the decoders and the writers a `StageLoad`: the share
+of the last 2 s spent working, waiting for input and waiting for output, and the
+average working time per block read or file decoded or written. The tuner thread
+publishes the loads every 500 ms, also when the writer count is fixed.
+
+`Summary` holds the files written, failed, kept (already there) and not reached,
+the bytes, the elapsed time, the first fatal error, the disk kind and the
+tuner's final settings, and whether the index was written.
+
+Files already in the output folder are left out before the pipeline sees the
+plan: `npk::ExistingFiles::scan(out)` lists them (path and size) and
+`PlanOptions::existing` marks every planned entry whose file is there with its
+size as `EntryStatus::existing`. The reader skips those, and the index records
+them as `ok`, as the run that wrote them did. A file cut short by an interrupted
+run has another size and is written again.
 
 ## 11. Testing
 

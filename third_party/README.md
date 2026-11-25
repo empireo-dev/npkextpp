@@ -10,6 +10,7 @@ archives into the build tree and checks their SHA-256.
 | Zstandard | 1.5.7 | BSD-3-Clause (dual BSD/GPLv2, used under BSD) | https://github.com/facebook/zstd/releases/tag/v1.5.7 | compression mode 3 |
 | libdeflate | 1.26 | MIT | https://github.com/ebiggers/libdeflate/releases/tag/v1.26 | compression mode 1 (zlib) and resdb |
 | CLI11 | 2.7.2 | BSD-3-Clause | https://github.com/CLIUtils/CLI11/releases/tag/v2.7.2 | command line (app only), single header |
+| FTXUI | 6.1.9 | MIT | https://github.com/ArthurSonzogni/FTXUI/releases/tag/v6.1.9 (source archive) | the app's live terminal display (screen + dom only) |
 
 All are compatible with npkextpp's MIT license and with GPLv3/AGPLv3 if the
 project is relicensed or linked into nxscriptpp. Their license texts are

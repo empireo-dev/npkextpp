@@ -59,7 +59,7 @@ void WriterPool::fail_write(WriteJob& job, const fs::path& path, Error error)
     std::error_code ignored;
     fs::remove(path, ignored);   // no half-written files
     if (is_fatal(error)) ctx_.fatal.report(error, ctx_.stop);
-    ctx_.fail(*job.planned, "cannot write " + job.path + ": " + error.message);
+    ctx_.fail(*job.planned, "cannot write " + job.path + ": " + error.message, job.source_index);
 }
 
 void WriterPool::write(unsigned index, WriteJob& job)
@@ -103,6 +103,10 @@ void WriterPool::written(WriteJob& job)
     ctx_.progress.files_written.fetch_add(1, std::memory_order_relaxed);
     ctx_.progress.bytes_written.fetch_add(job.data.size(), std::memory_order_relaxed);
     ctx_.progress.bytes_on_disk.store(ctx_.writeback.bytes_on_disk(), std::memory_order_relaxed);
+    if (SourceProgress* counts = ctx_.source_progress(job.source_index)) {
+        counts->bytes_done.fetch_add(job.data.size(), std::memory_order_relaxed);
+        counts->files_done.fetch_add(1, std::memory_order_relaxed);
+    }
 }
 
 } // namespace npk::pipeline

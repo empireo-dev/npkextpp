@@ -199,8 +199,28 @@ Tuner::Sample Tuner::take() const
     sample.bytes = ctx_.progress.bytes_written.load(std::memory_order_relaxed);
     sample.files = ctx_.progress.files_written.load(std::memory_order_relaxed);
     sample.bytes_read = ctx_.progress.bytes_read.load(std::memory_order_relaxed);
+    sample.blocks_read = ctx_.progress.blocks_read.load(std::memory_order_relaxed);
+    sample.files_decoded = ctx_.progress.files_decoded.load(std::memory_order_relaxed);
     sample.at_ns = StageClock::now_ns();
     return sample;
+}
+
+void Tuner::publish(const Sample& now)
+{
+    history_.push_back(now);
+    while (history_.size() > kLoadWindows + 1) history_.pop_front();
+    if (history_.size() < 2) return;
+    const Sample& then = history_.front();
+    const auto store = [](StageLoad& load, const StageTimes& times, std::uint64_t items) {
+        load.working.store(static_cast<float>(times.share(StageState::working)), std::memory_order_relaxed);
+        load.waiting_input.store(static_cast<float>(times.share(StageState::waiting_input)), std::memory_order_relaxed);
+        load.waiting_output.store(static_cast<float>(times.share(StageState::waiting_output)), std::memory_order_relaxed);
+        const double ms = items ? static_cast<double>(times[StageState::working]) / 1e6 / static_cast<double>(items) : 0;
+        load.ms_per_item.store(static_cast<float>(ms), std::memory_order_relaxed);
+    };
+    store(ctx_.progress.reader, now.reader - then.reader, now.blocks_read - then.blocks_read);
+    store(ctx_.progress.decoders, now.decoders - then.decoders, now.files_decoded - then.files_decoded);
+    store(ctx_.progress.writers, now.writers - then.writers, now.files - then.files);
 }
 
 void Tuner::set_writers(unsigned count)
@@ -248,6 +268,7 @@ void Tuner::run(std::stop_token stop)
             sleep();
             const Sample now = take();
             if (ctx_.options.trace) trace(now, previous);
+            publish(now);
             previous = now;
         }
         return;
@@ -270,6 +291,7 @@ void Tuner::run(std::stop_token stop)
 
         const Sample now = take();
         if (ctx_.options.trace) trace(now, previous);
+        publish(now);
         const double seconds = static_cast<double>(now.at_ns - previous.at_ns) / kSecond;
         if (seconds <= 0) continue;
         const StageTimes reader = now.reader - previous.reader;

@@ -20,7 +20,34 @@ npkextpp --install "path/to/Magic Awakened" --entry ui/login/bg.png --out .
 ```
 
 `npkextpp --help` lists every option. The options and exit codes are the same as
-npkext's (0 ok, 1 some entries failed, 2 bad input, 130 interrupted).
+npkext's (0 ok, 1 some entries failed, 2 bad input, 130 interrupted), plus:
+
+- `--scan` looks for archives in the whole installation. Without it, the app only
+  checks which archives of the game's known list
+  ([core/data/known_archives.txt](core/data/known_archives.txt), compiled in) are
+  there, and lists the others as missing. While no archive of that list is found
+  (the list is still empty), it scans on its own.
+- `--overwrite` writes every file again. Without it, files already in the output
+  folder with the right size are kept, so a second run, or one after an
+  interrupted run, writes only what is missing.
+
+What the screen shows, in a terminal (redrawn every 50 ms, drawn with
+[FTXUI](third_party/README.md)):
+
+1. the name in a box, then the installation, the archives found, the names and the plan;
+2. the disk test: the median of random 4 KiB reads and the write speed, and the
+   drive type assumed from them (SSD or HDD), which decides how the tuner searches;
+3. **Pipeline:** the reading buffer size and the number of writers as the tuner
+   sets them, and for the reader, the decoders and the writers the share of the
+   last 2 s spent busy, starved (waiting for input) and blocked (waiting for
+   output), with the average time per block or file;
+4. **Progress:** a bar, the percentage, files and bytes done, speed, ETA;
+5. **Archives:** every archive in two columns (one on a narrow terminal), each with
+   its own bar, files done and ETA; missing ones are marked. When they don't fit
+   the terminal, finished ones fold into one line and the waiting ones are cut short.
+
+Redirected to a file, it prints the same without colours, a progress line every
+10 s instead of the live part, and the archive list at the end.
 
 ## Layout
 

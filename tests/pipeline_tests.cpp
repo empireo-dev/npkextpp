@@ -13,9 +13,11 @@
 #include "npk/plan.hpp"
 
 #include "disk_model.hpp"   // private to npk_pipeline
-#include "disk_probe.hpp"
+#include "npk/pipeline/disk_probe.hpp"
 
 #include <atomic>
+#include <fstream>
+#include <iterator>
 #include <chrono>
 #include <map>
 #include <random>
@@ -464,6 +466,47 @@ TEST(disk_model_ranks_counts_whatever_mix_they_were_measured_on)
     const auto two = model.predict(2, disk.now);
     CHECK(one && two);
     CHECK(one->seconds < two->seconds);
+}
+
+TEST(a_second_run_writes_only_what_is_missing)
+{
+    Fixture f(busy_install);
+    pl::Options options;
+    options.output_root = f.out();
+    options.disk_kind = pl::DiskKind::ssd;
+    npk::Plan first = f.plan;
+    (void)run(first, options);
+    const auto expected = output_tree(f.out());
+    const auto read_index = [&] {
+        std::ifstream in(f.out() / "_archives" / "res" / "ui.npk.csv", std::ios::binary);
+        return std::string(std::istreambuf_iterator<char>(in), {});
+    };
+    const std::string index = read_index();
+
+    // Lose a few files and cut one short, as an interrupted run would.
+    std::size_t removed = 0;
+    for (const auto& entry : fs::recursive_directory_iterator(f.out() / "res" / "ui" / "dir3")) {
+        if (entry.is_regular_file() && removed++ < 5) fs::remove(entry.path());
+    }
+    fs::resize_file(f.out() / "res" / "model" / "texture" / "t0.dds", 1000);
+
+    const npk::ExistingFiles existing = npk::ExistingFiles::scan(f.out());
+    npk::PlanOptions plan_options;
+    plan_options.existing = &existing;
+    npk::Planner planner(f.manifest, &*f.installation);
+    npk::Plan second = planner.build(f.installation->archives(), plan_options);
+    CHECK_EQ(second.totals.files_to_write, 6u);
+
+    pl::Progress progress(second.source_count());
+    const pl::Summary summary = pl::run(second, options, progress);
+    CHECK_EQ(summary.files_written, 6u);
+    CHECK_EQ(summary.files_existing, first.totals.files_to_write - 6);
+    CHECK(output_tree(f.out()) == expected);
+    CHECK(read_index() == index);   // the kept files are recorded as before
+
+    std::uint64_t done = 0;
+    for (const auto& counts : progress.sources()) done += counts.files_done.load();
+    CHECK_EQ(done, 6u);
 }
 
 TEST(disk_probe_tells_hard_disks_from_ssds)

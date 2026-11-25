@@ -10,7 +10,7 @@
 
 namespace npk::pipeline {
 
-inline constexpr std::string_view kIndexFolder = "_archives";
+inline constexpr std::string_view kIndexFolder = kIndexFolderName;
 
 // Writes the _archives/ index from a Plan whose entries carry their results, in
 // the same format as npkext:

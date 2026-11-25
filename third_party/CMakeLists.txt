@@ -7,6 +7,7 @@
 #   npk::zstd        Zstandard, static, single-threaded, no legacy formats
 #   npk::libdeflate  libdeflate (raw deflate / zlib), static
 #   CLI11::CLI11     header-only command line parser (only needed by the app)
+#   ftxui::screen, ftxui::dom   terminal rendering (only needed by the app)
 
 include(FetchContent)
 
@@ -87,4 +88,23 @@ if(NOT TARGET CLI11::CLI11)
     add_library(npk_cli11 INTERFACE)
     target_include_directories(npk_cli11 SYSTEM INTERFACE "${CMAKE_CURRENT_SOURCE_DIR}/cli11")
     add_library(CLI11::CLI11 ALIAS npk_cli11)
+endif()
+
+# --- FTXUI 6.1.9 (MIT): terminal rendering for the app's live display --------
+# Only the screen and dom libraries are used (no interactive components).
+if(NPKEXTPP_BUILD_APP)
+    set(FTXUI_QUIET ON CACHE BOOL "" FORCE)
+    set(FTXUI_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+    set(FTXUI_BUILD_DOCS OFF CACHE BOOL "" FORCE)
+    set(FTXUI_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+    set(FTXUI_BUILD_TESTS_FUZZER OFF CACHE BOOL "" FORCE)
+    set(FTXUI_ENABLE_INSTALL OFF CACHE BOOL "" FORCE)
+    set(FTXUI_CLANG_TIDY OFF CACHE BOOL "" FORCE)
+    set(FTXUI_DEV_WARNINGS OFF CACHE BOOL "" FORCE)
+    FetchContent_Declare(ftxui_source
+        URL "${CMAKE_CURRENT_SOURCE_DIR}/ftxui/ftxui-6.1.9.tar.gz"
+        URL_HASH SHA256=45819c1e54914783d4a1ca5633885035d74146778a1f74e1213cdb7b76340e71
+        DOWNLOAD_EXTRACT_TIMESTAMP FALSE
+    )
+    FetchContent_MakeAvailable(ftxui_source)
 endif()

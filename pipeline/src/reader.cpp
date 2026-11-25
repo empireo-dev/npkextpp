@@ -34,17 +34,19 @@ void Reader::run()
 {
     clock_.enter(StageState::working);
     const std::stop_token stop = ctx_.stop.get_token();
+    std::uint32_t index = 0;
     for (OutputGroup& group : ctx_.plan.groups) {
         for (ArchiveSource& source : group.sources) {
             if (stop.stop_requested()) break;
-            read_source(source);
+            read_source(source, index++);
         }
     }
     ctx_.decode_queue.close();
     clock_.enter(StageState::waiting_input);
+    ctx_.progress.reading_done.store(true, std::memory_order_relaxed);
 }
 
-void Reader::read_source(ArchiveSource& source)
+void Reader::read_source(ArchiveSource& source, std::uint32_t index)
 {
     // The entries to write, in storage order (the plan keeps them sorted by offset).
     std::vector<PlannedEntry*> todo;
@@ -58,7 +60,7 @@ void Reader::read_source(ArchiveSource& source)
 
     auto file = InputFile::open(source.path);
     if (!file) {
-        for (PlannedEntry* planned : todo) ctx_.fail(*planned, file.error().message);
+        for (PlannedEntry* planned : todo) ctx_.fail(*planned, file.error().message, index);
         return;
     }
     file->advise_sequential();
@@ -66,7 +68,7 @@ void Reader::read_source(ArchiveSource& source)
     // Entries whose bytes are not inside the file fail on their own.
     std::erase_if(todo, [&](PlannedEntry* planned) {
         if (end_of(source.entry(*planned)) <= file->size()) return false;
-        ctx_.fail(*planned, "data runs past the end of " + to_utf8(source.path.filename()));
+        ctx_.fail(*planned, "data runs past the end of " + to_utf8(source.path.filename()), index);
         return true;
     });
 
@@ -95,6 +97,7 @@ void Reader::read_source(ArchiveSource& source)
         auto chunk = std::make_shared<ReadChunk>();
         chunk->lease = BudgetLease(ctx_.read_budget, size);
         chunk->source = &source;
+        chunk->source_index = index;
         chunk->file_offset = start;
         chunk->size = size;
         chunk->data = std::make_unique_for_overwrite<std::byte[]>(size);
@@ -103,7 +106,7 @@ void Reader::read_source(ArchiveSource& source)
         i = j;
 
         if (auto read = file->read_at(start, {chunk->data.get(), size}); !read) {
-            for (const ChunkEntry& entry : chunk->entries) ctx_.fail(*entry.planned, read.error().message);
+            for (const ChunkEntry& entry : chunk->entries) ctx_.fail(*entry.planned, read.error().message, index);
             continue;
         }
         if (FakeDisk* disk = ctx_.options.fake_disk) {
@@ -112,6 +115,7 @@ void Reader::read_source(ArchiveSource& source)
             file->forget(start, size);   // the bytes are in our buffer now; never read again
         }
         ctx_.progress.bytes_read.fetch_add(size, std::memory_order_relaxed);
+        ctx_.progress.blocks_read.fetch_add(1, std::memory_order_relaxed);
 
         mark_shared(chunk->entries);
         if (!emit(std::move(chunk))) return;

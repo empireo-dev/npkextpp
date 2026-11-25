@@ -5,24 +5,30 @@
 //   3. build the plan           (read every table of contents, decide every entry)
 //   4. unpack                   (npk::pipeline on all cores, or one --entry on this thread)
 #include "cli_options.hpp"
+#include "console.hpp"
+#include "dashboard.hpp"
 #include "licenses.hpp"
-#include "progress_view.hpp"
 
 #include "npk/decoder.hpp"
 #include "npk/inputs.hpp"
 #include "npk/install.hpp"
 #include "npk/names.hpp"
 #include "npk/paths.hpp"
+#include "npk/pipeline/disk_probe.hpp"
 #include "npk/pipeline/index_writer.hpp"
 #include "npk/pipeline/pipeline.hpp"
 #include "npk/plan.hpp"
 
 #include <algorithm>
 #include <atomic>
+#include <chrono>
+#include <condition_variable>
 #include <csignal>
 #include <cstdio>
 #include <fstream>
+#include <functional>
 #include <iostream>
+#include <mutex>
 #include <optional>
 #include <stdexcept>
 #include <string>
@@ -72,7 +78,8 @@ struct Inputs {
 Inputs find_archives(const CliOptions& options)
 {
     Inputs inputs;
-    if (options.install) inputs.installation = unwrap(npk::Installation::open(*options.install));
+    const auto search = options.scan ? npk::ArchiveSearch::scan : npk::ArchiveSearch::known;
+    if (options.install) inputs.installation = unwrap(npk::Installation::open(*options.install, search));
     const npk::Installation* installation = inputs.installation ? &*inputs.installation : nullptr;
 
     if (!options.inputs.empty()) {
@@ -98,10 +105,47 @@ std::string section_name(std::string_view section)
     return section.empty() ? std::string("(top level)") : std::string(section) + "/";
 }
 
-void show_plan(Console& console, const npk::Plan& plan, std::size_t names, std::size_t manifests,
-               const std::optional<npk::Installation>& installation, bool verbose)
+// Archives of the known list that are not there, if the whole installation is unpacked.
+std::vector<std::string> missing_archives(const CliOptions& options, const std::optional<npk::Installation>& installation)
 {
-    if (installation) console.line("Installation  " + npk::to_utf8(installation->root()));
+    std::vector<std::string> missing;
+    if (!installation || !options.inputs.empty()) return missing;
+    for (const std::string& path : installation->missing_archives()) {
+        const std::string name = npk::lower_ascii(path.substr(path.rfind('/') + 1));
+        bool wanted = options.unpack.empty();
+        for (const std::string& pattern : options.unpack) {
+            std::string p = npk::lower_ascii(pattern);
+            if (!p.ends_with(".npk")) p += ".npk";
+            wanted = wanted || npk::wildcard_match(name, p);
+        }
+        if (wanted) missing.push_back(path);
+    }
+    return missing;
+}
+
+void show_sources(Console& console, const std::optional<npk::Installation>& installation, std::size_t selected,
+                  std::size_t missing)
+{
+    if (!installation) return;
+    console.line("Installation  " + npk::to_utf8(installation->root()));
+    const std::size_t found = installation->archives().size();
+    const std::string chosen = selected == found ? "" : ", " + format_count(selected) + " selected";
+    if (installation->scanned()) {
+        const std::string why = installation->known_count() == 0
+                                    ? " (the built-in list of the game's archives is empty)"
+                                    : " (none of the " + format_count(installation->known_count()) +
+                                          " known archives is here)";
+        console.line("Archives      " + format_count(found) + " found by scanning the installation" + chosen +
+                     (why.empty() ? "" : why));
+    } else {
+        console.line("Archives      " + format_count(found) + " of " + format_count(installation->known_count()) +
+                     " known archives here" + chosen + (missing ? ", " + format_count(missing) + " missing" : "") +
+                     " (--scan looks for others)");
+    }
+}
+
+void show_plan(Console& console, const npk::Plan& plan, std::size_t names, std::size_t manifests, bool verbose)
+{
     console.line("Names         " + format_count(names) + " paths from " + std::to_string(manifests) + " manifest" +
                  (manifests == 1 ? "" : "s"));
     console.line("Plan          " + format_count(plan.source_count()) + " archives into " +
@@ -109,6 +153,11 @@ void show_plan(Console& console, const npk::Plan& plan, std::size_t names, std::
                  " files to write (" + format_bytes(plan.totals.raw_bytes) + "), " +
                  format_count(plan.totals.overridden) + " overridden, " + format_count(plan.totals.unnamed) +
                  " unnamed");
+    if (plan.totals.existing) {
+        console.line("              " + format_count(plan.totals.existing) + " files (" +
+                     format_bytes(plan.totals.existing_bytes) +
+                     ") are already in the output folder and are kept (--overwrite writes them again)");
+    }
     if (verbose) {
         for (const npk::OutputGroup& group : plan.groups) {
             std::string sources;
@@ -122,9 +171,10 @@ void show_plan(Console& console, const npk::Plan& plan, std::size_t names, std::
 }
 
 struct Counts {
-    std::uint64_t folders = 0, files = 0, named = 0, unnamed = 0, overridden = 0, failed = 0, bytes = 0;
+    std::uint64_t folders = 0, files = 0, named = 0, unnamed = 0, overridden = 0, failed = 0, bytes = 0, kept = 0;
     void add(const Counts& other)
     {
+        kept += other.kept;
         folders += other.folders;
         files += other.files;
         named += other.named;
@@ -143,6 +193,7 @@ Counts count(const npk::OutputGroup& group)
         for (const npk::PlannedEntry& planned : source.entries) {
             if (planned.replaced_by >= 0) ++counts.overridden;
             if (planned.status == npk::EntryStatus::failed) ++counts.failed;
+            if (planned.status == npk::EntryStatus::existing) ++counts.kept;
             if (planned.status != npk::EntryStatus::written) continue;
             counts.bytes += source.entry(planned).raw_size;
             if (planned.disposition != npk::Disposition::write) continue;
@@ -167,16 +218,16 @@ void show_summary(Console& console, const npk::Plan& plan, const npk::pipeline::
 
     const auto row = [&](const std::string& name, const Counts& c) {
         char text[256];
-        std::snprintf(text, sizeof text, "%-28s %8s %10s %10s %9s %11s %7s %11s", name.c_str(),
+        std::snprintf(text, sizeof text, "%-28s %8s %10s %10s %9s %11s %7s %11s %10s", name.c_str(),
                       format_count(c.folders).c_str(), format_count(c.files).c_str(), format_count(c.named).c_str(),
                       format_count(c.unnamed).c_str(), format_count(c.overridden).c_str(),
-                      format_count(c.failed).c_str(), format_bytes(c.bytes).c_str());
+                      format_count(c.failed).c_str(), format_bytes(c.bytes).c_str(), format_count(c.kept).c_str());
         console.line(text);
     };
     console.line("");
     char header[256];
-    std::snprintf(header, sizeof header, "%-28s %8s %10s %10s %9s %11s %7s %11s", "Section", "Folders", "Files",
-                  "Named", "Unnamed", "Overridden", "Failed", "Written");
+    std::snprintf(header, sizeof header, "%-28s %8s %10s %10s %9s %11s %7s %11s %10s", "Section", "Folders", "Files",
+                  "Named", "Unnamed", "Overridden", "Failed", "Written", "Kept");
     console.line(header);
     for (const auto& [name, counts] : sections) row(name, counts);
     row("Total", total);
@@ -202,10 +253,13 @@ void show_summary(Console& console, const npk::Plan& plan, const npk::pipeline::
     }
 
     const double rate = summary.seconds > 0 ? static_cast<double>(summary.bytes_written) / summary.seconds : 0;
-    console.line("\nDone in " + format_duration(summary.seconds) + " (" + format_bytes(static_cast<std::uint64_t>(rate)) +
-                 "/s, " + std::string(summary.disk == npk::pipeline::DiskKind::unknown ? "" : std::string(npk::pipeline::name_of(summary.disk)) + ", ") +
-                 std::to_string(summary.writers) + " writers, " + std::to_string(summary.read_block >> 20) +
-                 " MiB reads). Output: " + npk::to_utf8(out));
+    std::string how = "nothing new to write";
+    if (summary.bytes_written > 0) {
+        how = format_bytes(static_cast<std::uint64_t>(rate)) + "/s, ";
+        if (summary.disk != npk::pipeline::DiskKind::unknown) how += std::string(npk::pipeline::name_of(summary.disk)) + ", ";
+        how += std::to_string(summary.writers) + " writers, " + std::to_string(summary.read_block >> 20) + " MiB reads";
+    }
+    console.line("\nDone in " + format_duration(summary.seconds) + " (" + how + "). Output: " + npk::to_utf8(out));
     console.line("_archives/ records every archive and where each of its files went; see _archives/README.txt.");
 }
 
@@ -224,6 +278,11 @@ int extract_entry(Console& console, npk::Plan& plan, std::string wanted, const f
                 if (planned.disposition != npk::Disposition::write) continue;
                 const std::string path = npk::lower_ascii(planned.path);
                 if (path != as_given && path != in_resources) continue;
+                if (planned.status == npk::EntryStatus::existing) {
+                    console.line("Already there: " + npk::to_utf8(out / npk::from_utf8(planned.path)) +
+                                 " (--overwrite writes it again)");
+                    return kExitOk;
+                }
 
                 auto archive = npk::Archive::open(source.path);
                 if (!archive) throw InputError(archive.error().message);
@@ -256,25 +315,60 @@ int extract_entry(Console& console, npk::Plan& plan, std::string wanted, const f
 
 // --- 4b. Everything ---------------------------------------------------------------------------
 
+// Redraws the live frame every 50 ms (a terminal), or prints a progress line
+// every 10 s (a log), until stopped. Every tick checks for Ctrl+C.
+void show_live(Console& console, Dashboard& dashboard, std::stop_token stop, const std::function<void()>& on_tick)
+{
+    using namespace std::chrono_literals;
+    std::mutex sleep_mutex;
+    std::condition_variable_any sleeper;
+    auto next_line = std::chrono::steady_clock::now() + 10s;
+    while (!stop.stop_requested()) {
+        on_tick();
+        if (console.interactive()) {
+            console.draw(dashboard.frame(console.width(), console.height() - 1));
+        } else if (std::chrono::steady_clock::now() >= next_line) {
+            console.line(dashboard.progress_line());
+            next_line += 10s;
+        }
+        std::unique_lock lock(sleep_mutex);
+        sleeper.wait_for(lock, stop, 50ms, [] { return false; });
+    }
+}
+
 int run(const CliOptions& options, Console& console)
 {
+    console.print(logo(NPKEXTPP_VERSION));
     if (!options.out && !options.dry_run) throw InputError("--out DIR is required (or use --dry-run to only look)");
 
     Inputs inputs = find_archives(options);
+    const std::vector<std::string> missing = missing_archives(options, inputs.installation);
+    show_sources(console, inputs.installation, inputs.archives.size(), missing.size());
+
     std::vector<fs::path> resdb_files = options.resdb;
     if (resdb_files.empty() && inputs.installation) resdb_files = inputs.installation->resdb_files();
     for (const fs::path& resdb : resdb_files) {
         std::error_code error;
         if (!fs::is_regular_file(resdb, error)) throw InputError("resdb file not found: " + npk::to_utf8(resdb));
     }
-
     const npk::ResourceManifest manifest = unwrap(npk::ResourceManifest::from_files(resdb_files));
+
+    // What an earlier run already wrote stays (unless --overwrite).
+    npk::ExistingFiles existing;
+    if (options.out && !options.overwrite) {
+        console.line("Output        " + npk::to_utf8(*options.out) + " (looking for files from earlier runs...)");
+        existing = npk::ExistingFiles::scan(*options.out);
+    } else if (options.out) {
+        console.line("Output        " + npk::to_utf8(*options.out) + " (--overwrite: every file is written again)");
+    }
+
     npk::PlanOptions plan_options;
     plan_options.keep_overridden = options.keep_overridden;
     plan_options.limit = options.limit;
+    plan_options.existing = &existing;
     npk::Planner planner(manifest, inputs.installation ? &*inputs.installation : nullptr);
     npk::Plan plan = planner.build(inputs.archives, plan_options);
-    show_plan(console, plan, manifest.size(), resdb_files.size(), inputs.installation, options.verbose);
+    show_plan(console, plan, manifest.size(), resdb_files.size(), options.verbose);
 
     if (options.entry) {
         if (!options.out) throw InputError("--entry needs --out DIR");
@@ -282,18 +376,42 @@ int run(const CliOptions& options, Console& console)
     }
     if (options.dry_run || plan.groups.empty()) return kExitOk;
 
+    std::error_code space_error;
+    fs::create_directories(*options.out, space_error);
+    const auto space = fs::space(*options.out, space_error);
+    if (!space_error) {
+        console.line("              " + format_bytes(plan.totals.raw_bytes) + " to write, " +
+                     format_bytes(space.available) + " free");
+        if (space.available < plan.totals.raw_bytes) console.line("Warning: not enough free disk space for everything.");
+    }
+
     npk::pipeline::Options pipeline_options;
     pipeline_options.output_root = *options.out;
     pipeline_options.verify = options.verify;
     if (options.verbose) pipeline_options.log = [&console](std::string_view line) { console.line(line); };
 
-    npk::pipeline::Progress progress;
+    // The disk test decides how the writer count is searched for.
+    npk::pipeline::DiskKind disk = npk::pipeline::DiskKind::unknown;
+    if (plan.totals.files_to_write > 0) {
+        std::vector<fs::path> archives;
+        for (const npk::OutputGroup& group : plan.groups) {
+            for (const npk::ArchiveSource& source : group.sources) archives.push_back(source.path);
+        }
+        console.line("");
+        const npk::pipeline::DiskProbe probe = npk::pipeline::probe_disk(*options.out, archives);
+        console.print(disk_test(probe));
+        disk = probe.kind;
+    }
+    pipeline_options.disk_kind = disk;
+
+    npk::pipeline::Progress progress(plan.source_count());
+    Dashboard dashboard(plan, missing, progress, disk);
     std::stop_source cancel;
     std::signal(SIGINT, on_interrupt);
     npk::pipeline::Summary summary;
     {
-        std::jthread view([&](std::stop_token stop) {
-            console.show_progress(progress, plan.totals.files_to_write, plan.totals.raw_bytes, stop, [&] {
+        std::jthread live([&](std::stop_token stop) {
+            show_live(console, dashboard, stop, [&] {
                 if (g_interrupted.load()) cancel.request_stop();
             });
         });
@@ -301,6 +419,8 @@ int run(const CliOptions& options, Console& console)
     }
     std::signal(SIGINT, SIG_DFL);
 
+    console.clear_frame();
+    console.print(dashboard.archive_list(console.width(), true));
     show_summary(console, plan, summary, *options.out);
     if (summary.index_error) console.error("cannot write the index: " + summary.index_error->message);
     if (summary.fatal) {

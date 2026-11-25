@@ -1,0 +1,12 @@
+# The archives of a complete Magic Awakened installation, one per line, relative
+# to the installation folder ('/' or '\' separators). Compiled into npkextpp:
+# without --scan, the app only checks which of these exist instead of walking
+# the whole installation, and lists the ones that don't as missing.
+#
+# Empty for now: fill it from a real installation. Unpack everything once with
+# --scan, then take the archive column of _archives/index.csv:
+#
+#   python3 tests/tools/known_archives.py OUT/_archives/index.csv > core/data/known_archives.txt
+#
+# While no archive of this list exists in an installation (an empty list, another
+# game version), the app scans on its own.

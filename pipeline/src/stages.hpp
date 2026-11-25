@@ -29,7 +29,7 @@ public:
     [[nodiscard]] const StageClock& clock() const noexcept { return clock_; }
 
 private:
-    void read_source(ArchiveSource& source);
+    void read_source(ArchiveSource& source, std::uint32_t index);
     bool emit(std::shared_ptr<ReadChunk> chunk);
 
     Context& ctx_;
@@ -84,8 +84,8 @@ private:
     std::condition_variable_any park_;
 };
 
-// Every 500 ms: compares how each stage spent its time and adjusts the number
-// of writers (hill climbing on throughput) and the read block size.
+// Every 500 ms: publishes how each stage spent its time (for the UI) and, when
+// adaptive, adjusts the number of writers and the read block size (§7).
 class Tuner {
 public:
     Tuner(Context& context, const Reader& reader, const DecoderPool& decoders, WriterPool& writers)
@@ -104,9 +104,14 @@ private:
         std::uint64_t bytes = 0;
         std::uint64_t files = 0;
         std::uint64_t bytes_read = 0;
+        std::uint64_t blocks_read = 0;
+        std::uint64_t files_decoded = 0;
         std::int64_t at_ns = 0;
     };
+    static constexpr std::size_t kLoadWindows = 4;   // Progress::reader/decoders/writers cover the last 2 s
+
     [[nodiscard]] Sample take() const;
+    void publish(const Sample& now);   // stage loads for the UI
     void set_writers(unsigned count);
     void trace(const Sample& now, const Sample& previous) const;
 
@@ -114,6 +119,7 @@ private:
     const Reader& reader_;
     const DecoderPool& decoders_;
     WriterPool& writers_;
+    std::deque<Sample> history_;
 };
 
 } // namespace npk::pipeline

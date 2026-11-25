@@ -9,6 +9,7 @@ set(_npk_license_files
     "Zstandard|${PROJECT_SOURCE_DIR}/third_party/zstd/LICENSE"
     "libdeflate|${PROJECT_SOURCE_DIR}/third_party/libdeflate/LICENSE"
     "CLI11|${PROJECT_SOURCE_DIR}/third_party/cli11/LICENSE"
+    "FTXUI|${PROJECT_SOURCE_DIR}/third_party/ftxui/LICENSE"
 )
 set(NPK_LICENSE_TEXT "")
 foreach(_item IN LISTS _npk_license_files)
@@ -24,12 +25,13 @@ configure_file(src/licenses.cpp.in "${CMAKE_CURRENT_BINARY_DIR}/generated/licens
 add_executable(npkextpp
     src/main.cpp
     src/cli_options.cpp
-    src/progress_view.cpp
+    src/console.cpp
+    src/dashboard.cpp
     "${CMAKE_CURRENT_BINARY_DIR}/generated/licenses.cpp"
 )
 target_include_directories(npkextpp PRIVATE src)
 target_compile_definitions(npkextpp PRIVATE NPKEXTPP_VERSION="${PROJECT_VERSION}")
-target_link_libraries(npkextpp PRIVATE npk::pipeline CLI11::CLI11)
+target_link_libraries(npkextpp PRIVATE npk::pipeline CLI11::CLI11 ftxui::dom ftxui::screen)
 npk_target_warnings(npkextpp)
 
 if(MINGW)

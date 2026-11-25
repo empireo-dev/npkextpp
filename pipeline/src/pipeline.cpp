@@ -2,7 +2,7 @@
 
 #include "npk/paths.hpp"
 #include "npk/pipeline/index_writer.hpp"
-#include "disk_probe.hpp"
+#include "npk/pipeline/disk_probe.hpp"
 #include "stages.hpp"
 
 #include <algorithm>
@@ -158,8 +158,7 @@ Summary run(Plan& plan, const Options& options, Progress& progress, std::stop_to
         decoder_pool.start(decoders);
         std::stop_source tuner_stop;
         std::stop_callback stop_tuner(ctx.stop.get_token(), [&tuner_stop] { tuner_stop.request_stop(); });
-        std::jthread tuner_thread;
-        if (options.adaptive || !options.writer_schedule.empty() || options.trace) tuner_thread = std::jthread([&] { tuner.run(tuner_stop.get_token()); });
+        std::jthread tuner_thread([&] { tuner.run(tuner_stop.get_token()); });   // also publishes the stage loads
 
         std::jthread reader_thread([&reader] { reader.run(); });
         reader_thread.join();
@@ -180,6 +179,7 @@ Summary run(Plan& plan, const Options& options, Progress& progress, std::stop_to
                 case EntryStatus::written: ++summary.files_written; break;
                 case EntryStatus::failed: ++summary.files_failed; break;
                 case EntryStatus::pending: ++summary.files_not_reached; break;
+                case EntryStatus::existing: ++summary.files_existing; break;
                 }
             }
         }

@@ -9,6 +9,8 @@ namespace fs = std::filesystem;
 
 namespace npk {
 
+extern const char* const kKnownArchivesText;   // generated from core/data/known_archives.txt
+
 namespace {
 
 fs::path resolved(const fs::path& path)
@@ -32,7 +34,35 @@ bool is_file(const fs::path& path)
 
 } // namespace
 
-Result<Installation> Installation::open(const fs::path& folder)
+std::span<const std::string> known_archives()
+{
+    static const std::vector<std::string> list = [] {
+        std::vector<std::string> out;
+        std::string_view text = kKnownArchivesText;
+        while (!text.empty()) {
+            const std::size_t end = text.find('\n');
+            std::string_view line = text.substr(0, end);
+            text = end == std::string_view::npos ? std::string_view{} : text.substr(end + 1);
+            while (!line.empty() && (line.back() == '\r' || line.back() == ' ' || line.back() == '\t')) line.remove_suffix(1);
+            while (!line.empty() && (line.front() == ' ' || line.front() == '\t')) line.remove_prefix(1);
+            if (line.empty() || line.front() == '#') continue;
+            std::string path(line);
+            std::ranges::replace(path, '\\', '/');
+            out.push_back(std::move(path));
+        }
+        std::ranges::sort(out);
+        out.erase(std::ranges::unique(out).begin(), out.end());
+        return out;
+    }();
+    return list;
+}
+
+Result<Installation> Installation::open(const fs::path& folder, ArchiveSearch search)
+{
+    return open(folder, search, known_archives());
+}
+
+Result<Installation> Installation::open(const fs::path& folder, ArchiveSearch search, std::span<const std::string> known)
 {
     const fs::path root = resolved(folder);
     if (!is_dir(root)) return make_error(Errc::invalid_input, "installation folder not found: " + to_utf8(folder));
@@ -41,6 +71,7 @@ Result<Installation> Installation::open(const fs::path& folder)
         return make_error(Errc::invalid_input, to_utf8(root) + " does not look like a game installation "
                                                                "(expected neox_bin/ or res/resdb + Documents/)");
     }
+    installation.find_archives(search, known);
     return installation;
 }
 
@@ -50,7 +81,10 @@ std::optional<Installation> Installation::find_above(const fs::path& path)
     while (folder.has_parent_path() && folder.parent_path() != folder) {
         folder = folder.parent_path();
         Installation candidate(folder);
-        if (candidate.looks_valid()) return candidate;
+        if (candidate.looks_valid()) {
+            candidate.find_archives(ArchiveSearch::known, known_archives());
+            return candidate;
+        }
     }
     return std::nullopt;
 }
@@ -62,7 +96,26 @@ bool Installation::looks_valid() const
     return has_engine || has_resources;
 }
 
-std::vector<fs::path> Installation::archives() const
+void Installation::find_archives(ArchiveSearch search, std::span<const std::string> known)
+{
+    known_count_ = known.size();
+    if (search == ArchiveSearch::known) {
+        for (const std::string& relative : known) {
+            fs::path path = root_ / from_utf8(relative);
+            if (is_file(path)) archives_.push_back(std::move(path));
+            else missing_.push_back(relative);
+        }
+        if (!archives_.empty()) {
+            std::ranges::sort(archives_);
+            return;
+        }
+        missing_.clear();   // a different game version, or not the game: the list says nothing here
+    }
+    archives_ = scan_archives();
+    scanned_ = true;
+}
+
+std::vector<fs::path> Installation::scan_archives() const
 {
     std::vector<fs::path> found;
     std::error_code error;
