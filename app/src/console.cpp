@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <cstdio>
 #include <cstdlib>
+#include <optional>
 #include <string>
 #include <thread>
 
@@ -34,10 +35,27 @@ namespace {
 
 constexpr int kWidthWithoutTerminal = 100;
 
+// TERM, read without MSVC's getenv deprecation warning (C4996 under /W4).
+std::optional<std::string> term_env()
+{
+#if defined(_WIN32)
+    char* value = nullptr;
+    std::size_t len = 0;
+    if (::_dupenv_s(&value, &len, "TERM") != 0 || value == nullptr) return std::nullopt;
+    std::string out(value);
+    std::free(value);
+    return out;
+#else
+    const char* value = std::getenv("TERM");
+    if (value == nullptr) return std::nullopt;
+    return std::string(value);
+#endif
+}
+
 bool is_terminal()
 {
     if (NPK_ISATTY(NPK_FILENO(stdout)) == 0) return false;
-    const char* term = std::getenv("TERM");
+    const std::optional<std::string> term = term_env();
 #if defined(_WIN32)
     // The Windows console has no TERM; it understands escape codes once asked to.
     const HANDLE out = ::GetStdHandle(STD_OUTPUT_HANDLE);
@@ -45,9 +63,9 @@ bool is_terminal()
     if (!::GetConsoleMode(out, &mode)) return false;
     if (!::SetConsoleMode(out, mode | ENABLE_VIRTUAL_TERMINAL_PROCESSING | ENABLE_PROCESSED_OUTPUT)) return false;
     ::SetConsoleOutputCP(CP_UTF8);
-    return term == nullptr || std::string_view(term) != "dumb";
+    return !term || *term != "dumb";
 #else
-    return term != nullptr && std::string_view(term) != "dumb";
+    return term && *term != "dumb";
 #endif
 }
 

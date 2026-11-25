@@ -9,6 +9,7 @@
 #include "npk/inputs.hpp"
 #include "npk/install.hpp"
 #include "npk/names.hpp"
+#include "npk/paths.hpp"
 #include "npk/pipeline/pipeline.hpp"
 #include "npk/plan.hpp"
 
@@ -17,8 +18,19 @@
 #include <atomic>
 #include <chrono>
 #include <cstdio>
+
+#if defined(_WIN32)
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+#else
 #include <fcntl.h>
 #include <unistd.h>
+#endif
 
 #include <fstream>
 #include <memory>
@@ -97,16 +109,39 @@ void warm_cache(const npk::Plan& plan)
     }
 }
 
+// Flushes written data toward the disk, so a --real benchmark counts the cost of
+// writing it out instead of leaving it in the OS cache.
+void flush_os_caches()
+{
+#if defined(_WIN32)
+    // Windows has no global sync, and flushing a whole volume needs admin rights;
+    // the files were written buffered and are already closed, so this is the best
+    // a user-mode tool can do.
+    (void)::_flushall();
+#else
+    ::sync();
+#endif
+}
+
 // Drops the archives from the OS cache, so a real run reads them from the disk.
 void drop_cache(const npk::Plan& plan)
 {
-    ::sync();
+    flush_os_caches();
     for (const auto& group : plan.groups) {
         for (const auto& source : group.sources) {
+#if defined(_WIN32)
+            // No user-mode call evicts a named file from the Windows cache;
+            // reopening it without buffering is the closest best-effort.
+            const HANDLE file = ::CreateFileW(npk::long_path(source.path).c_str(), GENERIC_READ,
+                                              FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr,
+                                              OPEN_EXISTING, FILE_FLAG_NO_BUFFERING, nullptr);
+            if (file != INVALID_HANDLE_VALUE) ::CloseHandle(file);
+#else
             const int fd = ::open(source.path.c_str(), O_RDONLY);
             if (fd < 0) continue;
             ::posix_fadvise(fd, 0, 0, POSIX_FADV_DONTNEED);
             ::close(fd);
+#endif
         }
     }
 }
@@ -268,7 +303,7 @@ int main(int argc, char** argv)
     });
     npk::pipeline::Summary summary = npk::pipeline::run(plan, options, progress);
     if (real) {
-        ::sync();   // count writing the data out
+        flush_os_caches();   // count writing the data out
         summary.seconds = since(start);
     }
     done = true;

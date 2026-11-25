@@ -113,6 +113,10 @@ cmake -S . -B build -G Ninja
 cmake --build build
 ```
 
+On Windows with MSVC, run these from a "x64 Native Tools Command Prompt for VS"
+(or after `vcvars64.bat`) so the compiler and Ninja are on `PATH`. Visual
+Studio's bundled CMake and Ninja also work from the IDE.
+
 The result is a single file, `build/app/npkextpp` (`npkextpp.exe`), with no
 DLLs, configs or resources next to it:
 
