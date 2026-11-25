@@ -20,6 +20,7 @@ constexpr std::int64_t kWarmUp = 2 * kSecond;          // first probe: after the
 constexpr std::int64_t kProbePause = 30 * kSecond;     // after a probe that did not help
 constexpr std::int64_t kNoisyPause = 30 * kSecond;     // after giving up on a disk too uneven to measure
 constexpr std::int64_t kBlockPause = 2 * kSecond;      // between read block changes
+constexpr std::int64_t kArchivePause = 10 * kSecond;   // a new big archive allows a probe this long after a decision
 constexpr double kBusy = 0.85;                         // a stage is the limit above this share of working time
 constexpr double kStarved = 0.5;                       // decoders mostly waiting for input
 constexpr double kBlocked = 0.5;                       // decoders mostly waiting for output space
@@ -29,8 +30,8 @@ constexpr std::uint64_t kBigArchive = std::uint64_t{64} << 20;
 
 // Throughput is compared in samples of `span` windows. A disk that stalls in
 // bursts makes short samples useless, so the span doubles while the samples
-// vary too much: 1 s, 2 s, 4 s, 8 s.
-constexpr unsigned kFirstSpan = 2;
+// vary too much: 2 s, 4 s, 8 s.
+constexpr unsigned kFirstSpan = 4;
 constexpr unsigned kMaxSpan = 16;
 constexpr std::size_t kBaselineSamples = 4;            // steady samples a probe is compared against
 constexpr std::size_t kMeasureSamples = 4;             // samples a probe is measured over
@@ -89,8 +90,13 @@ void Tuner::set_writers(unsigned count)
 
 void Tuner::run(std::stop_token stop)
 {
-    enum class Phase { steady, settle, measure };
+    // A probe is measured before -> after -> before again, and the "after" is
+    // compared with both "before" periods together. A slow change in conditions
+    // (the start-up fill, a different kind of archive) then shows up as variation
+    // between the two "before" periods instead of as a gain or a loss.
+    enum class Phase { steady, settle, probe, back };
     Phase phase = Phase::steady;
+    Phase after_settle = Phase::steady;
     unsigned span = kFirstSpan;
 
     // The sample being collected.
@@ -99,18 +105,25 @@ void Tuner::run(std::stop_token stop)
     double sample_blocked = 0;   // decoders' waiting-for-output share
     unsigned sample_windows = 0;
 
-    std::deque<double> recent;     // steady samples at the current writer count
-    std::deque<double> measured;   // samples during a probe
-    double baseline = 0;
-    double baseline_noise = 0;
+    std::deque<double> recent;     // steady samples at the current writer count: the first "before"
+    std::deque<double> measured;   // samples at the probed count
+    std::deque<double> back;       // samples after returning: the second "before"
     unsigned previous_writers = 0;
+    unsigned probe_writers = 0;
     bool go_down = false;
     bool gave_up_logged = false;
     const ArchiveSource* last_source = nullptr;
+    std::int64_t last_decision = 0;   // when a probe last ended
 
     Sample previous = take();
     std::int64_t next_probe = previous.at_ns + kWarmUp;
     std::int64_t next_block_change = previous.at_ns + kWarmUp;
+
+    const auto change_to = [&](unsigned writers, Phase then) {
+        set_writers(writers);
+        phase = Phase::settle;
+        after_settle = then;
+    };
 
     std::mutex sleep_mutex;
     std::condition_variable_any sleeper;
@@ -131,11 +144,14 @@ void Tuner::run(std::stop_token stop)
                               kFileCost * static_cast<double>(now.files - previous.files)) / seconds;
         previous = now;
 
-        // A new big archive may behave differently: allow a probe soon.
+        // A new big archive may behave differently: allow a probe sooner, but not
+        // right after a decision (a big installation starts one every few seconds).
         if (const ArchiveSource* source = ctx_.progress.current_source.load(std::memory_order_relaxed);
             source != last_source) {
             last_source = source;
-            if (source != nullptr && source->packed_bytes >= kBigArchive) next_probe = std::min(next_probe, now.at_ns);
+            if (source != nullptr && source->packed_bytes >= kBigArchive) {
+                next_probe = std::min(next_probe, std::max(now.at_ns, last_decision + kArchivePause));
+            }
         }
 
         // Reading is the limit: read bigger blocks (fewer calls, fewer seeks between writes).
@@ -151,7 +167,7 @@ void Tuner::run(std::stop_token stop)
 
         // --- Writers: collect a sample of `span` windows, then decide. ---
         if (phase == Phase::settle) {   // the window right after a change doesn't count
-            phase = Phase::measure;
+            phase = after_settle;
             sample_score = sample_busy = sample_blocked = 0;
             sample_windows = 0;
             continue;
@@ -195,49 +211,62 @@ void Tuner::run(std::stop_token stop)
                 continue;
             }
 
-            // Throughput grows roughly with the logarithm of the writer count, so the
-            // steps double or halve: 2 -> 4 -> 8 -> 16, or 2 -> 1.
-            const unsigned target = go_down ? std::max(current / 2, 1u) : std::min(current * 2, Tunables::kMaxWriters);
+            // One writer at a time, so a sweet spot at 3 or 5 is not stepped over.
+            const unsigned target = go_down ? std::max(current - 1, 1u) : std::min(current + 1, Tunables::kMaxWriters);
             if (target == current) {   // at a bound: look the other way next time
                 go_down = !go_down;
                 next_probe = now.at_ns + kProbePause;
                 continue;
             }
-            baseline = mean;
-            baseline_noise = noise;
             previous_writers = current;
+            probe_writers = target;
             measured.clear();
             ctx_.log(format("tuner: trying %u writers instead of %u", target, current));
-            set_writers(target);
-            phase = Phase::settle;
+            change_to(target, Phase::probe);
             continue;
         }
 
-        // Phase::measure
-        measured.push_back(sample);
-        if (measured.size() < kMeasureSamples) continue;
-        const auto [result, result_noise] = mean_and_noise(measured);
-        const double change = (result / baseline - 1) * 100;
-        // A gain smaller than the baseline's own variation could be luck, and so
-        // could any reading from samples that themselves vary too much.
-        if (result_noise <= kMaxNoise && result > baseline * (1 + std::max(kMinGain, baseline_noise))) {
-            ctx_.log(format("tuner: writers %u -> %u (%+.0f %%)", previous_writers, current, change));
-            next_probe = now.at_ns;   // keep going the same way,
-            recent = measured;        // and what was just measured is the next baseline
-        } else {
-            set_writers(previous_writers);
-            if (result_noise > kMaxNoise) {
-                ctx_.log(format("tuner: writers %u -> %u inconclusive (%.0f %% variation), back to %u", previous_writers,
-                                current, result_noise * 100, previous_writers));
-            } else {
-                ctx_.log(format("tuner: writers %u -> %u did not help (%+.0f %%), back to %u", previous_writers,
-                                current, change, previous_writers));
-            }
-            go_down = !go_down;
-            next_probe = now.at_ns + kProbePause;
-            recent.clear();
+        if (phase == Phase::probe) {
+            measured.push_back(sample);
+            if (measured.size() < kMeasureSamples) continue;
+            back.clear();
+            change_to(previous_writers, Phase::back);   // measure "before" once more
+            continue;
         }
+
+        // Phase::back
+        back.push_back(sample);
+        if (back.size() < kMeasureSamples) continue;
+        std::deque<double> before = recent;
+        before.insert(before.end(), back.begin(), back.end());
+        const auto [base, base_noise] = mean_and_noise(before);
+        const auto [result, result_noise] = mean_and_noise(measured);
+        const double change = (result / base - 1) * 100;
+        // The gain must beat kMinGain and the uncertainty of the difference. A low
+        // bar on purpose: wrongly keeping a step near the best count costs a few
+        // percent, wrongly rejecting one can leave a fast disk at half speed.
+        const double uncertainty = std::sqrt(base_noise * base_noise / static_cast<double>(before.size()) +
+                                             result_noise * result_noise / static_cast<double>(measured.size()));
+        const double needed = std::max(kMinGain, uncertainty);
+        last_decision = now.at_ns;
         phase = Phase::steady;
+
+        if (base_noise > kMaxNoise || result_noise > kMaxNoise) {
+            ctx_.log(format("tuner: writers %u -> %u inconclusive (%.0f %% / %.0f %% variation), staying at %u",
+                            previous_writers, probe_writers, base_noise * 100, result_noise * 100, previous_writers));
+        } else if (result > base * (1 + needed)) {
+            ctx_.log(format("tuner: writers %u -> %u (%+.0f %%)", previous_writers, probe_writers, change));
+            change_to(probe_writers, Phase::steady);
+            next_probe = now.at_ns;   // keep going the same way,
+            recent = measured;        // with what was measured there as the first "before"
+            continue;
+        } else {
+            ctx_.log(format("tuner: writers %u -> %u did not help (%+.0f %%, needed %+.0f %%), staying at %u",
+                            previous_writers, probe_writers, change, needed * 100, previous_writers));
+        }
+        go_down = !go_down;
+        next_probe = now.at_ns + kProbePause;
+        recent = back;   // fresh samples at the current count
     }
 }
 

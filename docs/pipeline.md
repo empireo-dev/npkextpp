@@ -226,36 +226,59 @@ honest). The 64 KiB is a rough per-file cost, so that a stretch of tiny files an
 stretch of big textures score alike. Scores are compared in **samples** of several
 windows. A probe works like this:
 
-1. Take the mean of the last 4 samples at the current W (the baseline).
+1. Take the last 4 samples at the current W: the first "before".
 2. **Too uneven to compare?** If the samples vary by more than 35 % (standard
-   deviation over the mean), double the sample length and collect again: 1 s, 2 s,
-   4 s, up to 8 s. Only if 8 s samples are still that uneven does the tuner give up,
+   deviation over the mean), double the sample length and collect again: 2 s, 4 s,
+   up to 8 s. Only if 8 s samples are still that uneven does the tuner give up,
    keep W, and look again in 30 s. The VirtualBox disk used in development stalls
    for whole seconds; on it, half-second samples gave readings from −99 % to +206 %
    for changes that make no real difference (§13).
-3. Change W by **doubling or halving**: 2 → 4 → 8 → 16 (at most 32), or 2 → 1 (at
-   least 1). Throughput grows roughly with the logarithm of W. With +1 steps each
-   step gained ~5 %, too little to tell from noise, and the climb stalled at 2 while
-   8 was 30 % faster.
-4. Skip 1 window to let it settle, then measure 4 samples.
-5. Keep the change if it gains more than 5 % **and** more than the baseline's own
-   variation (a smaller gain could be luck). Then probe again in the same direction
-   straight away, with the samples just measured as the new baseline. If the
-   probe's own samples vary by more than 35 %, the result is *inconclusive* and
-   treated as "did not help". Otherwise go back to the previous W, turn the
-   direction around, and wait 30 s.
+3. Change W **by one**: up, or down (at least 1, at most 32). One step at a time
+   so that a best count of 3 or 5 isn't stepped over.
+4. Skip 1 window to let it settle, then measure 4 samples: the "after".
+5. Go back to the previous W, skip 1 window, and measure 4 samples again: the
+   second "before".
+6. Compare the "after" with both "before" periods together. A slow change in
+   conditions (the start-up fill, a different kind of archive) then shows up as
+   variation between the two "before" periods, not as a gain or a loss. Comparing
+   with the first "before" alone was fooled exactly like that: on the simulated
+   HDD, 2 → 3 writers measured "+251 %" during start-up, when 3 writers are really
+   slower.
+7. Decide:
+   - **inconclusive** if either the "before" or the "after" samples vary by more
+     than 35 %: stay;
+   - **keep** if the gain beats 5 % and the uncertainty of the difference
+     (√(cv_before²/n_before + cv_after²/n_after)). The bar is low on purpose:
+     wrongly keeping a step near the best count costs a few percent, wrongly
+     rejecting one can leave a fast disk at half speed. Then switch to the new W and
+     probe again in the same direction straight away, with the "after" samples as
+     the next first "before";
+   - otherwise **stay**.
+
+   After "stay" or "inconclusive", turn the direction around and wait 30 s.
 
 The data mix and the disk change during a run (texture archives versus thousands of
 tiny bxml files, an SSD's fast cache filling up). Probing therefore never stops: it
-resumes after the 30 s pause and whenever a big archive starts. Writers start at
-**2**: low enough not to swamp a hard disk, while fast storage climbs to 8 within
-the first ~20 s. With `--verbose` every decision is logged:
+resumes after the 30 s pause, and when a big archive (≥ 64 MiB) starts, but no
+sooner than 10 s after the last decision; a large installation starts a big
+archive every few seconds. Writers start at **2**: low enough not to swamp a hard
+disk. One probe takes about 17 s with 2 s samples, so fast storage needs a minute
+or two to climb to 6–8 writers; an extraction takes tens of minutes. With
+`--verbose` every decision is logged:
 
 ```
-tuner: trying 4 writers instead of 2
-tuner: writers 2 -> 4 (+12 %)
-tuner: trying 8 writers instead of 4
+tuner: trying 3 writers instead of 2
+tuner: writers 2 -> 3 (+27 %)
+tuner: writers 5 -> 6 did not help (+6 %, needed +6 %), staying at 5
 ```
+
+**On the simulated disks** (`docs/simulated_disk.md`, `tune_sim`):
+
+| disk | best fixed count | tuner ends at | notes |
+|---|---|---|---|
+| SSD | 16 (1217 MB/s); 6: 1039, 8: 1115 | 5–6 after ~65 s | above ~6, each extra writer gains less than the 5 % minimum |
+| HDD | 1 (45.9 MB/s); 2: 31.2 | 1 after ~120 s | start-up drift caught as "inconclusive" |
+| HDD, switch_cost 300 µs | 3 (51.2 MB/s); 2: 50.6, 4: 48.2 | 3 | |
 
 This is a heuristic. The thresholds come from the measurements in §13 and may
 change. They are constants in `tuner.cpp`, not options.
