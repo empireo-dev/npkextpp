@@ -2,10 +2,12 @@
 
 #include "npk/paths.hpp"
 #include "npk/pipeline/index_writer.hpp"
+#include "disk_probe.hpp"
 #include "stages.hpp"
 
 #include <algorithm>
 #include <chrono>
+#include <cstdio>
 #include <system_error>
 #include <thread>
 
@@ -109,14 +111,38 @@ Summary run(Plan& plan, const Options& options, Progress& progress, std::stop_to
     ctx.output_root = long_path(options.output_root);
     std::stop_callback forward_cancel(cancel, [&ctx] { ctx.stop.request_stop(); });
 
-    const unsigned writers = std::clamp(options.initial_writers, 1u, Tunables::kMaxWriters);
-    ctx.tunables.writers_allowed.store(writers);
-    progress.writers_active.store(writers);
     progress.read_block_kib.store(static_cast<std::uint32_t>(ctx.tunables.read_block.load() >> 10));
 
     if (auto error = options.fake_disk ? std::nullopt : create_folders(ctx)) {
         summary.fatal = std::move(error);
     } else {
+        // What kind of disk the output is on decides how the tuner searches.
+        if (options.disk_kind) {
+            ctx.disk = *options.disk_kind;
+        } else if (options.adaptive && !options.fake_disk) {
+            std::vector<fs::path> archives;
+            for (const OutputGroup& group : plan.groups) {
+                for (const ArchiveSource& source : group.sources) archives.push_back(source.path);
+            }
+            const DiskProbe probe = probe_disk(ctx.output_root, archives);
+            ctx.disk = probe.kind;
+            summary.probe_read_ms = probe.median_read_ms;
+            if (probe.kind == DiskKind::unknown) {
+                ctx.log("disk: " + probe.problem + "; tuning as for an SSD");
+            } else {
+                char line[160];
+                std::snprintf(line, sizeof line, "disk: %s (random reads from %s: median %.2f ms of %zu)",
+                              name_of(probe.kind), probe.read_from.c_str(), probe.median_read_ms, probe.reads);
+                ctx.log(line);
+            }
+        }
+        summary.disk = ctx.disk;
+        ctx.profile = profile_for(ctx.disk);
+        const unsigned writers =
+            std::clamp(options.initial_writers ? options.initial_writers : ctx.profile.initial, 1u, Tunables::kMaxWriters);
+        ctx.tunables.writers_allowed.store(writers);
+        progress.writers_active.store(writers);
+
         raise_open_file_limit();
         const unsigned hardware = std::max(std::thread::hardware_concurrency(), 1u);
         const unsigned decoders = options.decoder_threads ? options.decoder_threads : hardware;

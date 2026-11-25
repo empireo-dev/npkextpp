@@ -103,6 +103,7 @@ private:
         StageTimes reader, decoders, writers;
         std::uint64_t bytes = 0;
         std::uint64_t files = 0;
+        std::uint64_t bytes_read = 0;
         std::int64_t at_ns = 0;
     };
     [[nodiscard]] Sample take() const;

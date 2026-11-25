@@ -17,6 +17,9 @@
 #include <atomic>
 #include <chrono>
 #include <cstdio>
+#include <fcntl.h>
+#include <unistd.h>
+
 #include <fstream>
 #include <memory>
 #include <mutex>
@@ -28,6 +31,21 @@
 namespace fs = std::filesystem;
 
 namespace {
+
+// Writes go to one simulated disk, reads to another (or to the same one, or nowhere).
+class SplitDisk final : public npk::pipeline::FakeDisk {
+public:
+    SplitDisk(npk::pipeline::FakeDisk& output, npk::pipeline::FakeDisk* input) : output_(output), input_(input) {}
+    void write_file(unsigned writer, std::size_t bytes) override { output_.write_file(writer, bytes); }
+    void read(std::size_t bytes) override
+    {
+        if (input_) input_->read(bytes);
+    }
+
+private:
+    npk::pipeline::FakeDisk& output_;
+    npk::pipeline::FakeDisk* input_;
+};
 
 constexpr double kFileCost = 64 * 1024;   // as in the tuner's score
 
@@ -79,6 +97,20 @@ void warm_cache(const npk::Plan& plan)
     }
 }
 
+// Drops the archives from the OS cache, so a real run reads them from the disk.
+void drop_cache(const npk::Plan& plan)
+{
+    ::sync();
+    for (const auto& group : plan.groups) {
+        for (const auto& source : group.sources) {
+            const int fd = ::open(source.path.c_str(), O_RDONLY);
+            if (fd < 0) continue;
+            ::posix_fadvise(fd, 0, 0, POSIX_FADV_DONTNEED);
+            ::close(fd);
+        }
+    }
+}
+
 } // namespace
 
 int main(int argc, char** argv)
@@ -95,12 +127,23 @@ int main(int argc, char** argv)
     app.add_option("--set", settings, "change a disk parameter: name=value");
     app.add_option("--install", install, "game installation");
     app.add_option("--in", inputs, "archives (names or paths) instead of all");
+    std::optional<fs::path> real;
+    app.add_option("--real", real, "write real files into this folder (emptied first) instead of a simulated disk;"
+                                   " the archives are read cold");
+    std::string kind_name;
+    app.add_option("--kind", kind_name, "tune as for this kind of disk (default: the --disk preset; with --real: probe)")
+        ->check(CLI::IsMember({"ssd", "hdd"}));
     app.add_option("--writers", writers, "fixed writer count; no tuner");
     app.add_option("--repeat", repeat, "go through the archives this many times")->check(CLI::PositiveNumber);
     app.add_option("--decoders", decoders, "decoder threads (default: one per core)");
     app.add_flag("--curve", curve_mode, "measure the disk alone for 1..32 writers");
     app.add_option("--file-size", file_size, "file size for --curve");
     app.add_option("--seconds", seconds, "seconds per writer count for --curve");
+    std::string input_name = "same";
+    std::vector<std::string> input_settings;
+    app.add_option("--input", input_name, "where the archives are: same (the output disk), ram, ssd or hdd")
+        ->check(CLI::IsMember({"same", "ram", "ssd", "hdd"}));
+    app.add_option("--input-set", input_settings, "change an input disk parameter: name=value");
     std::vector<unsigned> schedule;
     double period = 10;
     bool trace = false;
@@ -144,17 +187,47 @@ int main(int argc, char** argv)
     }
     npk::Planner planner(*manifest, &*installation);
     npk::Plan plan = planner.build(archives, {});
-    warm_cache(plan);
+    if (real) {
+        if (repeat != 1) {
+            std::fprintf(stderr, "--real writes one pass only\n");
+            return 2;
+        }
+        fs::remove_all(*real);
+        drop_cache(plan);
+    } else {
+        warm_cache(plan);
+    }
 
     // Each pass writes the same files again; paths don't matter to a fake disk.
     const std::vector<npk::OutputGroup> one_pass = plan.groups;
     for (unsigned i = 1; i < repeat; ++i) plan.groups.insert(plan.groups.end(), one_pass.begin(), one_pass.end());
 
-    npk::sim::SimulatedDisk disk(params);
+    npk::sim::SimulatedDisk output_disk(params);
+    std::unique_ptr<npk::sim::SimulatedDisk> input_disk;
+    if (input_name == "ssd" || input_name == "hdd") {
+        npk::sim::DiskParams input = input_name == "hdd" ? npk::sim::hdd() : npk::sim::ssd();
+        input.shared_with_input = true;   // its reads cost time
+        input.seed = params.seed + 1;
+        for (const std::string& setting : input_settings) {
+            if (const std::string error = npk::sim::set_param(input, setting); !error.empty()) {
+                std::fprintf(stderr, "%s\n", error.c_str());
+                return 2;
+            }
+        }
+        std::printf("input %s: %s\n", input_name.c_str(), npk::sim::describe(input).c_str());
+        input_disk = std::make_unique<npk::sim::SimulatedDisk>(input);
+    }
+    npk::pipeline::FakeDisk* reads = input_name == "same" ? &output_disk : input_disk.get();
+    if (input_name == "ram") reads = nullptr;
+    SplitDisk disk(output_disk, reads);
     npk::pipeline::Options options;
-    options.output_root = "unused";
+    options.output_root = real ? *real : fs::path("unused");
     options.write_index = false;
-    options.fake_disk = &disk;
+    if (!real) options.fake_disk = &disk;
+    if (!kind_name.empty() || !real) {
+        const std::string kind = kind_name.empty() ? disk_name : kind_name;
+        options.disk_kind = kind == "hdd" ? npk::pipeline::DiskKind::hdd : npk::pipeline::DiskKind::ssd;
+    }
     options.decoder_threads = decoders;
     if (writers) {
         options.adaptive = false;
@@ -193,13 +266,18 @@ int main(int argc, char** argv)
             bytes = b, files = f, last = now;
         }
     });
-    const npk::pipeline::Summary summary = npk::pipeline::run(plan, options, progress);
+    npk::pipeline::Summary summary = npk::pipeline::run(plan, options, progress);
+    if (real) {
+        ::sync();   // count writing the data out
+        summary.seconds = since(start);
+    }
     done = true;
     reporter.join();
 
     const double mb = static_cast<double>(summary.bytes_written) / 1e6;
-    std::printf("result: %.1f s, %.1f MB/s, %.0f files/s, %llu files, %u writers at the end, %zu MiB reads\n",
+    std::printf("result: %.1f s, %.1f MB/s, %.0f files/s, %llu files, %u writers at the end, %zu MiB reads, tuned as %s\n",
                 summary.seconds, mb / summary.seconds, static_cast<double>(summary.files_written) / summary.seconds,
-                static_cast<unsigned long long>(summary.files_written), summary.writers, summary.read_block >> 20);
+                static_cast<unsigned long long>(summary.files_written), summary.writers, summary.read_block >> 20,
+                npk::pipeline::name_of(summary.disk));
     return summary.files_failed ? 1 : 0;
 }

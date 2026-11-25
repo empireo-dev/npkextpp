@@ -203,7 +203,8 @@ void show_summary(Console& console, const npk::Plan& plan, const npk::pipeline::
 
     const double rate = summary.seconds > 0 ? static_cast<double>(summary.bytes_written) / summary.seconds : 0;
     console.line("\nDone in " + format_duration(summary.seconds) + " (" + format_bytes(static_cast<std::uint64_t>(rate)) +
-                 "/s, " + std::to_string(summary.writers) + " writers, " + std::to_string(summary.read_block >> 20) +
+                 "/s, " + std::string(summary.disk == npk::pipeline::DiskKind::unknown ? "" : std::string(npk::pipeline::name_of(summary.disk)) + ", ") +
+                 std::to_string(summary.writers) + " writers, " + std::to_string(summary.read_block >> 20) +
                  " MiB reads). Output: " + npk::to_utf8(out));
     console.line("_archives/ records every archive and where each of its files went; see _archives/README.txt.");
 }

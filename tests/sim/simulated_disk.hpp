@@ -26,6 +26,7 @@ struct DiskParams {
     bool shared_with_input = false; // archive reads go through the pipe too
     double stall_every = 0;         // mean seconds of disk time between stalls; 0 = never
     double stall_length = 0;        // seconds per stall
+    double buffer = 64 << 20;       // bytes writers may be ahead of the disk: the OS write cache
     std::uint32_t seed = 1;
 };
 
@@ -39,7 +40,7 @@ std::string describe(const DiskParams& params);
 
 // Works in virtual time. Every stream (each writer, and the reader) has its own
 // clock that moves by modelled costs, and sleeps only once it is more than
-// kSlack ahead of the real clock. The shared parts (channels, pipe) book time
+// kSlack (plus the write buffer) ahead of the real clock. The shared parts (channels, pipe) book time
 // from the real clock, so one stream's lead doesn't drag the others along. Short sleeps overshoot by a lot on most
 // systems; this way the overshoot is paid back by later operations instead of
 // slowing the modelled disk down.
@@ -63,9 +64,10 @@ private:
     Clock::time_point& clock_of(unsigned stream);
     void transfer(unsigned stream, std::size_t bytes);
     static Clock::time_point ready(Clock::time_point clock);
-    static void catch_up(Clock::time_point until);
+    void catch_up(Clock::time_point until, bool buffered) const;
 
     DiskParams params_;
+    std::chrono::steady_clock::duration ahead_;   // how far a stream may run ahead: the buffer at full bandwidth
     std::atomic<unsigned> in_flight_{0};
     std::vector<Clock::time_point> streams_;   // each entry used by one thread only
 

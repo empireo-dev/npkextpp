@@ -220,68 +220,116 @@ Either signal alone means "writing is the limit":
   decoders spent 95 % of their time waiting to hand work on, and 8 writers were 30 %
   faster.
 
-**Probing writers (hill climbing).** Throughput is scored as
-`bytes written + 64 KiB × files written` (§6.4 explains why written bytes are
-honest). The 64 KiB is a rough per-file cost, so that a stretch of tiny files and a
-stretch of big textures score alike. Scores are compared in **samples** of several
-windows. A probe works like this:
-
-1. Take the last 4 samples at the current W: the first "before".
-2. **Too uneven to compare?** If the samples vary by more than 35 % (standard
-   deviation over the mean), double the sample length and collect again: 2 s, 4 s,
-   up to 8 s. Only if 8 s samples are still that uneven does the tuner give up,
-   keep W, and look again in 30 s. The VirtualBox disk used in development stalls
-   for whole seconds; on it, half-second samples gave readings from −99 % to +206 %
-   for changes that make no real difference (§13).
-3. Change W **by one**: up, or down (at least 1, at most 32). One step at a time
-   so that a best count of 3 or 5 isn't stepped over.
-4. Skip 1 window to let it settle, then measure 4 samples: the "after".
-5. Go back to the previous W, skip 1 window, and measure 4 samples again: the
-   second "before".
-6. Compare the "after" with both "before" periods together. A slow change in
-   conditions (the start-up fill, a different kind of archive) then shows up as
-   variation between the two "before" periods, not as a gain or a loss. Comparing
-   with the first "before" alone was fooled exactly like that: on the simulated
-   HDD, 2 → 3 writers measured "+251 %" during start-up, when 3 writers are really
-   slower.
-7. Decide:
-   - **inconclusive** if either the "before" or the "after" samples vary by more
-     than 35 %: stay;
-   - **keep** if the gain beats 5 % and the uncertainty of the difference
-     (√(cv_before²/n_before + cv_after²/n_after)). The bar is low on purpose:
-     wrongly keeping a step near the best count costs a few percent, wrongly
-     rejecting one can leave a fast disk at half speed. Then switch to the new W and
-     probe again in the same direction straight away, with the "after" samples as
-     the next first "before";
-   - otherwise **stay**.
-
-   After "stay" or "inconclusive", turn the direction around and wait 30 s.
-
-The data mix and the disk change during a run (texture archives versus thousands of
-tiny bxml files, an SSD's fast cache filling up). Probing therefore never stops: it
-resumes after the 30 s pause, and when a big archive (≥ 64 MiB) starts, but no
-sooner than 10 s after the last decision; a large installation starts a big
-archive every few seconds. Writers start at **2**: low enough not to swamp a hard
-disk. One probe takes about 17 s with 2 s samples, so fast storage needs a minute
-or two to climb to 6–8 writers; an extraction takes tens of minutes. With
-`--verbose` every decision is logged:
+**The disk-cost model** (`disk_model.cpp`). Comparing throughput between periods
+doesn't work: the data being written changes faster than the writer count's effect
+can be measured (`docs/tuner_redesign.md` has the investigation). Instead, every
+window in which writing was the limit is fitted to
 
 ```
-tuner: trying 3 writers instead of 2
-tuner: writers 2 -> 3 (+27 %)
-tuner: writers 5 -> 6 did not help (+6 %, needed +6 %), staying at 5
+window time = a[W] × files written + b × bytes written + c × bytes read
 ```
 
-**On the simulated disks** (`docs/simulated_disk.md`, `tune_sim`):
+- `a[W]` is the disk time per file at W writers: what concurrency changes.
+- `b` (bandwidth) and `c` (reading, when the archives share the disk) are shared
+  by all writer counts. They come from a least-squares fit over all saturated
+  windows. It forgets with a 2-minute half-life, and windows far slower than the
+  model expects (stalls) are weighted down.
+- `a[W]` is the weighted median of per-chunk estimates. A chunk is 4 consecutive
+  saturated windows (2 s), and each chunk is weighted by its number of files. Its
+  uncertainty comes from the median absolute deviation. Estimates are kept for 3
+  minutes; a count with 4 of them is *known*.
+- The **current mix** is the files and bytes per second of about the last minute,
+  saturated or not. Writer counts are compared by their predicted time for it:
+  `T[W] = a[W]·files + b·written + c·read`. The comparison doesn't depend on what
+  was being written while each count was measured, so there is no need to go back
+  and measure "before" again.
 
-| disk | best fixed count | tuner ends at | notes |
+**The kind of disk** (`disk_probe.cpp`). Hard disks and SSDs want different
+searches. An SSD gains 2–3× from many writers. A hard disk gains a few percent
+at most, or loses from more writers, and the model's comparisons there are too
+noisy to trust small differences (on a real hard disk, 1, 2 and 4 writers were
+within 5 % of each other). So before the run, the pipeline times random 4 KiB
+reads that bypass the OS cache (`O_DIRECT` / `FILE_FLAG_NO_BUFFERING`):
+
+- It reads the largest archive if that is on the output's volume and at least
+  64 MiB. Otherwise it writes a 16 MiB test file into the output folder, flushes
+  it, reads that, and deletes it.
+- At least 16 reads and 0.3 s, at most 128 reads or 2 s. The **median** read time
+  decides, so a stall or a disk waking up doesn't.
+- A median of **1 ms or more is a hard disk**. A hard disk needs 2 ms at the very
+  least (seek plus half a turn; usually 5–15 ms), an SSD 0.05–0.3 ms, so the
+  threshold has room on both sides. Measured on this project's VM over a hard
+  disk: 5–20 ms.
+- If the probe can't run, the disk is tuned as an SSD: too few writers on an SSD
+  costs far more than too many on a hard disk.
+
+That picks a profile (`tunables.hpp`):
+
+| | starts at | at most | a gain must be over |
 |---|---|---|---|
-| SSD | 16 (1217 MB/s); 6: 1039, 8: 1115 | 5–6 after ~65 s | above ~6, each extra writer gains less than the 5 % minimum |
-| HDD | 1 (45.9 MB/s); 2: 31.2 | 1 after ~120 s | start-up drift caught as "inconclusive" |
-| HDD, switch_cost 300 µs | 3 (51.2 MB/s); 2: 50.6, 4: 48.2 | 3 | |
+| SSD (or unknown) | 4 writers | 32 | 3 % |
+| hard disk | 1 writer | 4 | 10 % |
 
-This is a heuristic. The thresholds come from the measurements in §13 and may
-change. They are constants in `tuner.cpp`, not options.
+The log says what it found: `disk: hard disk (random reads from an archive:
+median 8.31 ms of 30)`, and the summary line names the kind.
+
+Inside a virtual machine the host's cache can make a hard disk look like an SSD.
+That's the safe direction to be wrong in.
+
+**The search** (`WriterSearch` in `tuner.cpp`) starts once the profile's starting
+count is known and writing is the limit:
+
+1. **Expand:** try W + 1 (never above the profile's limit), then steps of +2, +4, +8 … while each try is better.
+   Small gains near the top (around 1 % per writer on an SSD) can't be seen one
+   writer at a time, but add up over a bigger step.
+2. **Refine:** when a step is not better, the best count lies between the best so
+   far and that try. Halve the step and try again, down to ±1.
+3. **Downwards:** if the very first step up didn't help, search downwards the
+   same way (a hard disk: 2 → 1).
+4. **Judging a try:** wait until the candidate is known (at least 8 s of
+   saturated windows), then compare `T`:
+   - *better* if it's more than the profile's margin (3 %, or 10 % on a hard
+     disk) faster and the difference exceeds 2 standard errors;
+   - *worse* the same way the other side;
+   - *the same* if it's within the margin and so is the uncertainty. Then the
+     fewer writers win (fewer threads, kinder to hard disks);
+   - otherwise keep measuring, up to 12 estimates (24 s), then go by the
+     estimate.
+   - If writing stops being the limit for 40 s during a try, it ends without a
+     decision.
+5. **Settled:** run at the best count. After 2 minutes, search again from there,
+   since the disk and the mix change during a run.
+
+The log (`--verbose`) shows every step:
+
+```
+tuner: trying 3 writers (best so far 2)
+tuner: 3 writers better than 2 (-25 % time, +-2 %)
+tuner: trying 5 writers (best so far 3)
+...
+tuner: 25 writers not better than 17 (+0 % time, +-2 %)
+tuner: settled on 17 writers (8 us per file, 1460 MB/s)
+```
+
+Results (simulated disks from `docs/simulated_disk.md`, and the real hard disk
+behind this project's VM, 1.3 GB benchmark installation):
+
+| disk | best fixed | tuned |
+|---|---|---|
+| real hard disk | 1 writer: 165.0 s (2: 170.3 s, 4: 173.1 s) | probe 19 ms → hard disk; 165.2 s, ends at 2 |
+| simulated SSD | 16–17 writers | climbs 4 → 5 → 7 → 11 → …, 17–18 in longer runs |
+| simulated HDD | 1 writer, 56 MB/s (2: 51) | 52.8 MB/s (94 %), ends at 3 |
+| simulated SSD taken for a hard disk | | 679 MB/s against 1153 tuned as an SSD |
+
+On hard disks the model's verdicts are noisy (it called 2 writers 63 % faster
+on the simulated HDD, where they are 9 % slower), but the 1–4 range keeps that
+to a few percent. The last row is why an unknown disk is tuned as an SSD.
+
+The thresholds are constants in `tuner.cpp`, `tunables.hpp`, `disk_probe.hpp`
+and `disk_model.hpp`, not options.
+
+One file (`--entry`) doesn't go through the pipeline at all: it is read, decoded
+and written directly on the main thread, with no probe and no tuner.
 
 ## 8. Errors and stopping
 

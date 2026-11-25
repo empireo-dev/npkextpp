@@ -12,9 +12,13 @@
 #include "npk/pipeline/pipeline.hpp"
 #include "npk/plan.hpp"
 
+#include "disk_model.hpp"   // private to npk_pipeline
+#include "disk_probe.hpp"
+
 #include <atomic>
 #include <chrono>
 #include <map>
+#include <random>
 #include <thread>
 
 using namespace test;
@@ -377,6 +381,120 @@ TEST(a_second_run_keeps_earlier_index_rows)
     const Bytes index = read_file(options.output_root / "_archives" / "index.csv");
     const auto rows = pl::parse_csv(std::string_view(reinterpret_cast<const char*>(index.data()), index.size()));
     CHECK_EQ(rows.size(), 3u);   // header + both archives
+}
+
+// --- DiskModel ------------------------------------------------------------------------
+
+namespace {
+
+// Feeds windows of a known disk: seconds = a[W] * files + b * written + c * read,
+// with mixes from tiny files to textures, and an occasional stall.
+struct FakeTimes {
+    std::map<unsigned, double> a;   // seconds per file at W writers
+    double b = 1 / 150e6;           // seconds per byte written
+    double c = 0;                   // seconds per byte read
+    std::mt19937 random{7};
+    std::int64_t now = 0;
+
+    pl::Window window(double kb_per_file)
+    {
+        (void)this;
+        pl::Window w;
+        w.files = std::uniform_real_distribution<double>(50, 400)(random);
+        w.bytes_written = w.files * kb_per_file * 1024;
+        w.bytes_read = w.bytes_written / 2;
+        return w;
+    }
+    void feed(pl::DiskModel& model, unsigned writers, double kb_per_file, int windows)
+    {
+        for (int i = 0; i < windows; ++i) {
+            pl::Window w = window(kb_per_file * std::uniform_real_distribution<double>(0.5, 1.5)(random));
+            w.seconds = a.at(writers) * w.files + b * w.bytes_written + c * w.bytes_read;
+            if (std::uniform_int_distribution<int>(0, 19)(random) == 0) w.seconds += 0.3;   // stall
+            now += 500'000'000;
+            model.observe_mix(w);
+            model.observe(writers, w, now);
+        }
+    }
+};
+
+bool near(double value, double expected, double tolerance) { return std::abs(value / expected - 1) <= tolerance; }
+
+} // namespace
+
+TEST(disk_model_recovers_the_costs)
+{
+    FakeTimes disk;
+    disk.a = {{1, 600e-6}, {2, 1100e-6}};
+    disk.c = 1 / 300e6;
+    pl::DiskModel model;
+    // Alternate counts and mixes, as a run would.
+    for (int round = 0; round < 6; ++round) {
+        disk.feed(model, 1, round % 2 ? 300 : 8, 40);
+        model.break_chunk();
+        disk.feed(model, 2, round % 3 ? 40 : 600, 40);
+        model.break_chunk();
+    }
+    // Reads here are always half the bytes written, so only the combined byte cost can be known.
+    CHECK(near(model.seconds_per_byte_written() + model.seconds_per_byte_read() / 2, disk.b + disk.c / 2, 0.15));
+    const auto one = model.estimate(1, disk.now);
+    const auto two = model.estimate(2, disk.now);
+    CHECK(one && two);
+    CHECK(near(one->per_file, 600e-6, 0.15));
+    CHECK(near(two->per_file, 1100e-6, 0.15));
+    CHECK(model.known(1, disk.now) && model.known(2, disk.now));
+    CHECK(!model.known(3, disk.now));
+}
+
+// The case that fooled the throughput-based tuner: the better count happened to
+// be measured on tiny files, the worse one on big files that score well.
+TEST(disk_model_ranks_counts_whatever_mix_they_were_measured_on)
+{
+    FakeTimes disk;
+    disk.a = {{1, 600e-6}, {2, 1100e-6}};
+    pl::DiskModel model;
+    disk.feed(model, 1, 4, 40);       // tiny files at 1 writer: little written per second
+    model.break_chunk();
+    disk.feed(model, 1, 200, 40);
+    model.break_chunk();
+    disk.feed(model, 2, 600, 40);     // big files at 2 writers: many bytes per second
+    model.break_chunk();
+    disk.feed(model, 2, 60, 40);
+    const auto one = model.predict(1, disk.now);
+    const auto two = model.predict(2, disk.now);
+    CHECK(one && two);
+    CHECK(one->seconds < two->seconds);
+}
+
+TEST(disk_probe_tells_hard_disks_from_ssds)
+{
+    CHECK(pl::classify(0) == pl::DiskKind::unknown);
+    CHECK(pl::classify(0.08) == pl::DiskKind::ssd);    // NVMe
+    CHECK(pl::classify(0.3) == pl::DiskKind::ssd);     // a slow SATA SSD
+    CHECK(pl::classify(2.5) == pl::DiskKind::hdd);     // a 15k rpm disk at best
+    CHECK(pl::classify(9.0) == pl::DiskKind::hdd);
+
+    // A real probe of the temporary folder decides on something and cleans up.
+    TempDir dir;
+    const pl::DiskProbe probe = pl::probe_disk(dir.path(), {});
+    CHECK(probe.kind != pl::DiskKind::unknown);
+    CHECK(probe.reads > 0);
+    CHECK(fs::is_empty(dir.path()));
+}
+
+TEST(each_kind_of_disk_starts_at_its_own_writer_count)
+{
+    Fixture f(busy_install);
+    for (const auto& [kind, writers] : {std::pair{pl::DiskKind::hdd, 1u}, std::pair{pl::DiskKind::ssd, 4u}}) {
+        npk::Plan plan = f.plan;
+        pl::Options options;
+        options.output_root = f.out() / pl::name_of(kind);
+        options.disk_kind = kind;
+        options.adaptive = false;
+        const pl::Summary summary = run(plan, options);
+        CHECK(summary.disk == kind);
+        CHECK_EQ(summary.writers, writers);
+    }
 }
 
 int main()

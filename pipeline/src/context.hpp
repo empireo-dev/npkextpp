@@ -59,6 +59,8 @@ struct Context {
     std::filesystem::path output_root;   // in the OS's form (extended-length on Windows)
 
     Tunables tunables;
+    DiskKind disk = DiskKind::unknown;
+    WriterProfile profile = kSsdProfile;
     std::stop_source stop;
     FatalSlot fatal;
 

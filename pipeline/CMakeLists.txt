@@ -11,6 +11,8 @@ add_library(npk_pipeline STATIC
     src/reader.cpp
     src/decoder_pool.cpp
     src/writer_pool.cpp
+    src/disk_model.cpp
+    src/disk_probe.cpp
     src/tuner.cpp
     src/index_writer.cpp
     src/pipeline.cpp

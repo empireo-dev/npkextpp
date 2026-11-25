@@ -8,7 +8,7 @@ and a per-file cost a_W for each count W. Fit jointly; then look at how stable
 a_W is from short chunks, and the predicted rate for a fixed mix."""
 import sys, numpy as np
 rows = np.array([[float(x) for x in l.split('trace ')[1].split()] for l in open(sys.argv[1]) if 'trace ' in l])
-dt, W, B, F, ww, wi, dw, dwo, rb = rows.T
+dt, W, B, F, ww, wi, dw, dwo, rb = rows.T[:9]
 keep = np.ones(len(rows), bool); keep[:8] = False
 for i in range(1, len(rows)):
     if W[i] != W[i-1]:

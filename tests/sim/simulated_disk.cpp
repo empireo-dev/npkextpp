@@ -90,6 +90,7 @@ std::string set_param(DiskParams& p, std::string_view assignment)
     else if (name == "switch_cost") p.switch_cost = value;
     else if (name == "stall_every") p.stall_every = value;
     else if (name == "stall_length") p.stall_length = value;
+    else if (name == "buffer") p.buffer = value;
     else if (name == "seed") p.seed = static_cast<std::uint32_t>(value);
     else return "unknown parameter " + std::string(name);
     return {};
@@ -100,14 +101,15 @@ std::string describe(const DiskParams& p)
     char text[400];
     std::snprintf(text, sizeof text,
                   "channels=%u file_latency=%.0fus contention=%.0f%% bandwidth=%.0fMB/s chunk=%zuKiB "
-                  "switch_cost=%.2fms shared_with_input=%s stall_every=%.1fs stall_length=%.0fms",
+                  "switch_cost=%.2fms shared_with_input=%s stall_every=%.1fs stall_length=%.0fms buffer=%.0fMiB",
                   p.channels, p.file_latency * 1e6, p.contention * 100, p.bandwidth / 1e6, p.chunk >> 10,
-                  p.switch_cost * 1e3, p.shared_with_input ? "yes" : "no", p.stall_every, p.stall_length * 1e3);
+                  p.switch_cost * 1e3, p.shared_with_input ? "yes" : "no", p.stall_every, p.stall_length * 1e3, p.buffer / 1048576);
     return text;
 }
 
 SimulatedDisk::SimulatedDisk(const DiskParams& params)
     : params_(params)
+    , ahead_(to_duration(params.buffer / params.bandwidth))
     , streams_(kMaxStreams, Clock::now())
     , slots_(params.channels, Clock::now())
     , pipe_free_(Clock::now())
@@ -134,8 +136,12 @@ SimulatedDisk::Clock::time_point SimulatedDisk::ready(Clock::time_point clock)
     return std::min(clock, Clock::now());
 }
 
-void SimulatedDisk::catch_up(Clock::time_point until)
+// Writers wait only once they are further ahead of the disk than the write buffer
+// holds, as with a real OS cache: a writer that wakes up late doesn't leave the
+// disk idle.
+void SimulatedDisk::catch_up(Clock::time_point until, bool buffered) const
 {
+    if (buffered) until -= ahead_;   // reads are not: the reader needs the data
     if (until - Clock::now() > kSlack) std::this_thread::sleep_until(until);
 }
 
@@ -154,7 +160,7 @@ void SimulatedDisk::write_file(unsigned writer, std::size_t bytes)
             *slot = start + latency;
             clock = std::max(clock + latency, *slot);
         }
-        catch_up(clock);
+        catch_up(clock, true);
     }
     transfer(writer, bytes);
     in_flight_.fetch_sub(1, std::memory_order_relaxed);
@@ -187,7 +193,7 @@ void SimulatedDisk::transfer(unsigned stream, std::size_t bytes)
             pipe_free_ = end;
             clock = std::max(clock + (end - start), end);
         }
-        catch_up(clock);
+        catch_up(clock, stream != kReader);
     }
 }
 

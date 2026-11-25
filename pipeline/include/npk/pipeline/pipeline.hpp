@@ -16,6 +16,12 @@
 
 namespace npk::pipeline {
 
+// What kind of disk the output folder is on. Decides how the tuner searches
+// for the writer count (docs/pipeline.md §7).
+enum class DiskKind { unknown, ssd, hdd };
+
+[[nodiscard]] const char* name_of(DiskKind kind) noexcept;
+
 // See docs/pipeline.md for how the pipeline works.
 struct Options {
     std::filesystem::path output_root;
@@ -25,8 +31,10 @@ struct Options {
     // Defaults suit real use; tests change them.
     std::size_t memory_budget = 0;   // bytes for read + decoded data; 0 = min(1 GiB, RAM / 8)
     unsigned decoder_threads = 0;    // 0 = one per hardware thread
-    unsigned initial_writers = 2;    // low enough for hard disks; the tuner climbs on faster ones
+    unsigned initial_writers = 0;    // 0 = where the tuner starts for this kind of disk
     bool adaptive = true;            // run the tuner
+    // Tests only: skip the disk probe and tune for this kind of disk.
+    std::optional<DiskKind> disk_kind;
 
     // Tests only: writers hand file sizes to this instead of writing files, and
     // no output folders are created. See docs/simulated_disk.md.
@@ -51,6 +59,8 @@ struct Summary {
     bool cancelled = false;                // the caller's stop token fired
     std::optional<Error> fatal;            // what stopped the run (disk full, ...)
     std::optional<Error> index_error;      // _archives/ could not be written
+    DiskKind disk = DiskKind::unknown;     // what the probe found
+    double probe_read_ms = 0;              // its median random read time
     unsigned writers = 0;                  // the tuner's final choices
     std::size_t read_block = 0;
 };

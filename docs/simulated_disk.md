@@ -39,6 +39,13 @@ A file write of `n` bytes by writer `w`:
    the seek that is left after the OS and the drive have reordered the
    writes.
 
+**Write cache.** Writers may run up to `buffer / bandwidth` ahead of the disk
+(64 MiB by default) before they wait, as with a real OS write cache. Without
+it, a writer that woke up late under full CPU load left the disk idle, which
+made runs with few writers slow and different every time (one writer on the
+HDD: 47, 33 and 25 MB/s in three runs; with the buffer 56.0 and 56.5). Reads
+are not buffered.
+
 Reading a block of `n` bytes is step 2 only, with the reader as its own
 stream, when `shared_with_input` is set.
 
@@ -66,6 +73,7 @@ blocked for `stall_length` (exponentially distributed gaps, fixed seed).
 | `shared_with_input`  | no         | yes        |
 | `stall_every`        | 5 s        | 10 s       |
 | `stall_length`       | 20 ms      | 300 ms     |
+| `buffer`             | 64 MiB     | 64 MiB     |
 
 What that gives, measured with `tune_sim --curve` (score = MB/s plus 64 KiB
 per file, as the tuner counts it):
@@ -125,6 +133,12 @@ tune_sim --install DIR [--in NAME...] --disk ssd|hdd [--set name=value ...]
          [--decoders N]
          [--schedule N N ... [--period S]]   cycle through fixed writer counts, S seconds each
          [--trace]           print the tuner's raw readings every 0.5 s
+         [--input same|ram|ssd|hdd [--input-set name=value ...]]
+                             where the archives are: the output disk (default),
+                             free, or a second simulated disk
+         [--kind ssd|hdd]    tune as for this kind of disk (default: the --disk preset)
+         [--real DIR]        write real files into DIR instead (emptied first);
+                             the archives are read cold and the disk probe runs
 tune_sim --disk ssd|hdd --curve --file-size BYTES [--seconds S] [--set ...]
 ```
 
@@ -147,4 +161,9 @@ and never end up below the default of 2 writers.
 - **The OS write cache.** The pipeline's writeback tracker keeps it small on
   Linux, so writes are treated as going straight to the disk.
 - **Any particular drive.** The presets are plausible, not measured. One run
-  on a real SSD at the end checks the model.
+  on a real SSD at the end checks the model. The real hard disk behind this
+  project's VM is slower (15 MB/s on the benchmark installation) and flatter
+  (1, 2 and 4 writers within 5 %) than the HDD preset; `--set
+  switch_cost=300us` is closer to it.
+- **The disk probe.** A simulated disk has no random reads to time, so
+  `tune_sim` names the kind of disk itself (`--kind`); `--real` runs the probe.

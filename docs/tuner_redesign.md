@@ -1,7 +1,8 @@
 # Tuner redesign: deciding on disk cost, not on throughput
 
-Status: **plan**. The tuner in `pipeline/src/tuner.cpp` (`docs/pipeline.md` §7)
-is unchanged until this is implemented.
+Status: **implemented**, with one change found on the way: the disk-cost model
+decides well on an SSD but not on a hard disk, so a probe before the run picks
+an SSD or a hard-disk search profile (`docs/pipeline.md` §7).
 
 ## 1. What is wrong
 
