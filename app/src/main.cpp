@@ -30,6 +30,7 @@
 #include <fstream>
 #include <functional>
 #include <iostream>
+#include <map>
 #include <mutex>
 #include <optional>
 #include <stdexcept>
@@ -492,30 +493,97 @@ std::string compression_name(const npk::Entry& entry)
     return name + (entry.encrypted() ? ", scrambled" : "");
 }
 
-// npkextpp update: one file of one archive replaced by a new version.
+std::string slashes(std::string path)
+{
+    std::ranges::replace(path, '\\', '/');
+    return path;
+}
+
+void show_replaced(Console& console, const npk::ReplaceResult& result, const std::vector<std::string>& names)
+{
+    std::size_t replaced = 0, at_end = 0, unchanged = 0, listed = 0;
+    for (const npk::Replacement& file : result.files) {
+        if (file.unchanged) ++unchanged;
+        else ++replaced, at_end += file.in_place ? 0 : 1;
+    }
+    constexpr std::size_t kListed = 20;
+    for (std::size_t i = 0; i < result.files.size(); ++i) {
+        const npk::Replacement& file = result.files[i];
+        if (file.unchanged || ++listed > kListed) continue;
+        console.line("  " + names[i] + "  " + format_bytes(file.before.raw_size) + " -> " + format_bytes(file.after.raw_size) +
+                     (file.in_place ? "" : ", at the end"));
+    }
+    if (replaced > kListed) console.line("  ... and " + format_count(replaced - kListed) + " more");
+    if (replaced == 0) {
+        console.line("Nothing to do: " + std::string(unchanged == 1 ? "the file is" : "every file is") +
+                     " the same as in the archive");
+        return;
+    }
+    std::string line = "Replaced      " + format_count(replaced) + (replaced == 1 ? " file" : " files");
+    if (unchanged) line += ", " + format_count(unchanged) + " unchanged";
+    console.line(line);
+    console.line(at_end == 0 ? "              all written over their old versions; the archive stays " +
+                                   format_bytes(result.size_after)
+                             : "              " +
+                                   (at_end == 1 ? std::string("1 was too big for its old place and went")
+                                                : format_count(at_end) + " were too big for their old places and went") +
+                                   " to the end; the archive grew from " + format_bytes(result.size_before) + " to " +
+                                   format_bytes(result.size_after));
+    console.line("Checked       read back from the archive: identical to the new versions");
+}
+
+// npkextpp update: files of one archive replaced by new versions, one given by
+// its path or every file of a folder laid out like the archive.
 int run_update(const UpdateOptions& update, Console& console)
 {
     console.print(logo(NPKEXTPP_VERSION));
     console.line("Archive       " + npk::to_utf8(update.target));
-    const npk::FoundEntry found = unwrap(npk::find_entry(update.target, update.path));
-    std::string shown = found.inner_path;
-    std::ranges::replace(shown, '\\', '/');
-    std::string wanted = update.path;
-    std::ranges::replace(wanted, '\\', '/');
-    console.line("File          " + shown + " (id " + hex8(found.id) + ")" +
-                 (shown == wanted ? "" : ", found from " + update.path));
 
-    const std::vector<std::byte> content = unwrap(npk::InputFile::read_all(update.new_file));
-    console.line("New version   " + npk::to_utf8(update.new_file) + " (" + format_bytes(content.size()) + ")");
-    const npk::Replacement done = unwrap(npk::replace_entry(update.target, found.id, content));
+    if (update.new_file) {
+        const npk::FoundEntry found = unwrap(npk::find_entry(update.target, *update.path));
+        const std::string shown = slashes(found.inner_path);
+        console.line("File          " + shown + " (id " + hex8(found.id) + ")" +
+                     (shown == slashes(*update.path) ? "" : ", found from " + *update.path));
+        const std::vector<std::byte> content = unwrap(npk::InputFile::read_all(*update.new_file));
+        console.line("New version   " + npk::to_utf8(*update.new_file) + " (" + format_bytes(content.size()) + ", " +
+                     "stored like the old one)");
+        const npk::ReplaceResult result = unwrap(npk::replace_entry(update.target, found.id, content));
+        show_replaced(console, result, {shown});
+        return kExitOk;
+    }
 
-    console.line("Replaced      " + format_bytes(done.before.raw_size) + " -> " + format_bytes(done.after.raw_size) +
-                 " (stored " + format_bytes(done.before.packed_size) + " -> " + format_bytes(done.after.packed_size) +
-                 ", " + compression_name(done.after) + ")");
-    console.line(done.in_place ? "              written over the old version; the archive stays " + format_bytes(done.size_after)
-                               : "              too big for the old place: written at the end, the archive grew from " +
-                                     format_bytes(done.size_before) + " to " + format_bytes(done.size_after));
-    console.line("Checked       read back from the archive: identical to the new version");
+    // A folder: every file in it, by its path relative to the folder.
+    const std::vector<npk::FolderFile> files = unwrap(npk::folder_files(*update.folder));
+    console.line("Folder        " + npk::to_utf8(*update.folder) + " (" + format_count(files.size()) +
+                 (files.size() == 1 ? " file)" : " files)"));
+    if (files.empty()) throw InputError("the folder has no files");
+    {
+        const npk::Archive archive = unwrap(npk::Archive::open(update.target));
+        std::vector<std::string> absent;
+        std::map<std::uint32_t, std::string> seen;
+        for (const npk::FolderFile& file : files) {
+            if (archive.find(file.id) == nullptr) absent.push_back(slashes(file.inner_path));
+            const auto [it, added] = seen.emplace(file.id, file.inner_path);
+            if (!added) {
+                throw InputError(slashes(it->second) + " and " + slashes(file.inner_path) + " are the same file of the archive");
+            }
+        }
+        if (!absent.empty()) {
+            std::string list;
+            for (std::size_t i = 0; i < absent.size() && i < 10; ++i) list += "\n  " + absent[i];
+            if (absent.size() > 10) list += "\n  ... and " + format_count(absent.size() - 10) + " more";
+            throw InputError(format_count(absent.size()) + (absent.size() == 1 ? " file of the folder is" : " files of the folder are") +
+                             " not in the archive (adding files is not supported yet), so nothing was changed:" + list);
+        }
+    }
+    std::vector<npk::Change> changes;
+    std::vector<std::string> names;
+    for (const npk::FolderFile& file : files) {
+        changes.push_back({file.id, [path = file.file] { return npk::InputFile::read_all(path); }});
+        names.push_back(slashes(file.inner_path));
+    }
+    const npk::ReplaceResult result = unwrap(npk::replace_entries(update.target, changes));
+    show_replaced(console, result, names);
     return kExitOk;
 }
 

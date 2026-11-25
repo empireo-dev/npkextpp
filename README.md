@@ -42,6 +42,15 @@ above it works too (`res/ui/login/bg.png`, as in the unpacked folder): the
 longest tail of it that is in the archive is used. It is case-sensitive, like
 the game's ids. A file that is not in the archive is an error.
 
+    npkextpp update --in unpacked/res/ui --target "path/to/Magic Awakened/res/ui.npk"
+
+With `--in`, every file of the folder replaces the one at the same path in the
+archive: paths relative to the folder are the paths in the archive, files in
+`_unnamed/` are matched by the id in their name, and `_archives/` and
+`_overridden/` are left out. Files identical to the archive's copy are left
+alone, so pointing at a whole unpacked archive rewrites only what was edited.
+If any file of the folder is not in the archive, nothing is changed.
+
 The new version is compressed and scrambled the way the old one was. If it fits
 where the old one was, it is written over it; if not, it goes at the end of the
 archive and the table of contents after it (nothing else moves). The file is

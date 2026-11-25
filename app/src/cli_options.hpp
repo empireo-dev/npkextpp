@@ -14,10 +14,12 @@ inline constexpr int kExitBadInput = 2;
 inline constexpr int kExitInterrupted = 130;
 
 // npkextpp update --new FILE --path PATH --target ARCHIVE
+// npkextpp update --in FOLDER --target ARCHIVE
 struct UpdateOptions {
-    std::filesystem::path new_file;   // the new version
-    std::string path;                 // its path in the archive
-    std::filesystem::path target;     // the archive to change
+    std::optional<std::filesystem::path> new_file;   // the new version of one file...
+    std::optional<std::string> path;                 // ... and its path in the archive
+    std::optional<std::filesystem::path> folder;     // or: every file of a folder, by its path in it
+    std::filesystem::path target;                    // the archive to change
 };
 
 struct CliOptions {

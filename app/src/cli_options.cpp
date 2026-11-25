@@ -37,6 +37,9 @@ examples:
 
   # replace one file inside an archive with a new version
   npkextpp update --new my_bg.png --path login/bg.png --target "path/to/Magic Awakened/res/ui.npk"
+
+  # replace every file of a folder laid out like the archive (changed ones only)
+  npkextpp update --in unpacked/res/ui --target "path/to/Magic Awakened/res/ui.npk"
 )";
 
 } // namespace
@@ -92,12 +95,22 @@ std::optional<CliOptions> parse_cli(int argc, char** argv, int& exit_code)
 
     UpdateOptions update;
     CLI::App* update_command = app.add_subcommand(
-        "update", "replace a file inside an archive with a new version (the archive is changed in place: keep a copy)");
-    update_command->add_option("--new", update.new_file, "the new version of the file")->required()->check(CLI::ExistingFile);
-    update_command->add_option("--path", update.path,
-                               "its path in the archive (login/bg.png in ui.npk; res/ui/login/bg.png works too)")
-        ->required();
+        "update", "replace files inside an archive with new versions (the archive is changed in place: keep a copy)");
+    auto* new_option = update_command->add_option("--new", update.new_file, "the new version of one file")
+                           ->check(CLI::ExistingFile);
+    auto* path_option = update_command->add_option(
+        "--path", update.path, "its path in the archive (login/bg.png in ui.npk; res/ui/login/bg.png works too)");
+    auto* in_option = update_command->add_option(
+        "--in", update.folder,
+        "a folder laid out like the archive: every file in it replaces the one at the same path "
+        "(unpacked/res/ui for ui.npk); files identical to the archive's are left alone")
+                          ->check(CLI::ExistingDirectory);
+    new_option->needs(path_option)->excludes(in_option);
+    path_option->needs(new_option);
     update_command->add_option("--target", update.target, "the archive to change")->required()->check(CLI::ExistingFile);
+    update_command->callback([&] {
+        if (!update.new_file && !update.folder) throw CLI::RequiredError("--new FILE --path PATH, or --in FOLDER,");
+    });
     app.require_subcommand(0, 1);
 
     try {

@@ -7,6 +7,7 @@
 #include "npk/decoder.hpp"
 #include "npk/filetypes.hpp"
 #include "npk/hash.hpp"
+#include "npk/input_file.hpp"
 #include "npk/inputs.hpp"
 #include "npk/install.hpp"
 #include "npk/mounts.hpp"
@@ -747,7 +748,7 @@ TEST(a_file_is_replaced_in_place_or_at_the_end)
     // Smaller than the old version: written over it, the archive keeps its size.
     const Bytes small = repeat("SMALL", 20);
     auto first = npk::replace_entry(path, npk::path_id("login\\bg.png"), small);
-    CHECK(first.has_value() && first->in_place);
+    CHECK(first.has_value() && first->files.size() == 1 && first->files[0].in_place);
     CHECK_EQ(fs::file_size(path), size);
     expected[npk::path_id("login\\bg.png")] = small;
     CHECK(archive_files(path) == expected);
@@ -755,9 +756,10 @@ TEST(a_file_is_replaced_in_place_or_at_the_end)
     // Larger: written where the table was, the table after it.
     const Bytes large = random_bytes(4000, 9, false);
     auto second = npk::replace_entry(path, npk::path_id("icons\\b.png"), large);
-    CHECK(second.has_value() && !second->in_place);
-    CHECK(second->after.offset % 4 == 0);
-    CHECK(second->after.compression() == npk::Compression::none && !second->after.encrypted());   // as before
+    CHECK(second.has_value() && second->files.size() == 1 && !second->files[0].in_place);
+    if (!second) return;
+    CHECK(second->files[0].after.offset % 4 == 0);
+    CHECK(second->files[0].after.compression() == npk::Compression::none && !second->files[0].after.encrypted());   // as before
     CHECK(fs::file_size(path) > size);
     expected[npk::path_id("icons\\b.png")] = large;
     CHECK(archive_files(path) == expected);
@@ -765,6 +767,54 @@ TEST(a_file_is_replaced_in_place_or_at_the_end)
     // Not in the archive.
     auto missing = npk::replace_entry(path, npk::path_id("icons\\c.png"), small);
     CHECK(!missing && missing.error().code == npk::Errc::not_found);
+}
+
+TEST(a_folder_replaces_the_files_at_the_same_paths)
+{
+    TempDir dir;
+    const fs::path path = write_npk(dir.path() / "ui.npk", {{"login\\bg.png", random_bytes(3000, 1, false)},
+                                                            {"icons\\a.png", random_bytes(800, 2)},
+                                                            {"icons\\b.png", random_bytes(500, 4)},
+                                                            {"secret", random_bytes(300, 5)}});
+    auto expected = archive_files(path);
+
+    // As unpacked: one file changed and grown, one shrunk, one untouched, the
+    // unnamed one by its id, and the unpack's own folders.
+    const fs::path folder = dir.path() / "ui";
+    const Bytes grown = random_bytes(6000, 7, false);
+    const Bytes shrunk = bytes("tiny");
+    write_file(folder / "login" / "bg.png", grown);
+    write_file(folder / "icons" / "a.png", shrunk);
+    write_file(folder / "icons" / "b.png", expected[npk::path_id("icons\\b.png")]);
+    char unnamed[32];
+    std::snprintf(unnamed, sizeof unnamed, "%08x.bin", npk::path_id("secret"));
+    write_file(folder / "_unnamed" / unnamed, bytes("found by id"));
+    write_file(folder / "_archives" / "index.csv", bytes("not a file of the archive"));
+
+    auto files = npk::folder_files(folder);
+    CHECK(files.has_value() && files->size() == 4u);
+    if (!files) return;
+    std::vector<npk::Change> changes;
+    for (const auto& file : *files) {
+        changes.push_back({file.id, [path = file.file] { return npk::InputFile::read_all(path); }});
+    }
+    auto result = npk::replace_entries(path, changes);
+    CHECK(result.has_value());
+    if (!result) return;
+    std::size_t unchanged = 0, at_end = 0;
+    for (const auto& file : result->files) unchanged += file.unchanged, at_end += (!file.unchanged && !file.in_place);
+    CHECK_EQ(unchanged, 1u);
+    CHECK_EQ(at_end, 1u);
+
+    expected[npk::path_id("login\\bg.png")] = grown;
+    expected[npk::path_id("icons\\a.png")] = shrunk;
+    expected[npk::path_id("secret")] = bytes("found by id");
+    CHECK(archive_files(path) == expected);
+
+    // Run again: every file is the same now.
+    auto again = npk::replace_entries(path, changes);
+    CHECK(again.has_value() && std::ranges::all_of(again->files, [](const auto& f) { return f.unchanged; }));
+    CHECK(archive_files(path) == expected);
 }
 
 TEST(a_file_is_found_by_any_path_ending_in_its_inner_path)

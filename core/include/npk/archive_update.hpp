@@ -17,9 +17,11 @@
 #include <cstddef>
 #include <cstdint>
 #include <filesystem>
+#include <functional>
 #include <span>
 #include <string>
 #include <string_view>
+#include <vector>
 
 namespace npk {
 
@@ -37,15 +39,45 @@ struct FoundEntry {
 struct Replacement {
     Entry before;
     Entry after;
-    bool in_place = false;           // written over the old version
-    std::uint64_t size_before = 0;   // of the archive
+    bool in_place = false;    // written over the old version
+    bool unchanged = false;   // the new version is the same file: nothing written
+};
+
+struct ReplaceResult {
+    std::vector<Replacement> files;   // in the order of the changes
+    std::uint64_t size_before = 0;    // of the archive
     std::uint64_t size_after = 0;
 };
 
-// Replaces the file `id` of the archive with `content`, compressed and
-// scrambled the way the old version was (its flags), then reads it back to
-// check it.
-[[nodiscard]] Result<Replacement> replace_entry(const std::filesystem::path& archive, std::uint32_t id,
-                                                std::span<const std::byte> content);
+// One file to replace: its id and how to get the new version (read when its
+// turn comes, so many large files need not be in memory together).
+struct Change {
+    std::uint32_t id = 0;
+    std::function<Result<std::vector<std::byte>>()> load;
+};
+
+// Replaces files of the archive, each compressed and scrambled the way its old
+// version was (its flags). A new version identical to the old one (same size
+// and checksum) is left alone. The table of contents is written once, after
+// all the files, then every replaced file is read back and compared. Every id
+// must be in the archive, each at most once. If a file cannot be loaded or
+// encoded, the ones before it stay replaced and the error says which.
+[[nodiscard]] Result<ReplaceResult> replace_entries(const std::filesystem::path& archive,
+                                                    std::span<const Change> changes);
+
+// One file: replace_entries() with new content already in memory.
+[[nodiscard]] Result<ReplaceResult> replace_entry(const std::filesystem::path& archive, std::uint32_t id,
+                                                  std::span<const std::byte> content);
+
+// The files of a folder that has the layout of an archive (as unpacked):
+// paths relative to the folder are the paths in the archive, and
+// _unnamed/<8 hex digits>[.ext] stands for the id. _archives/ and _overridden/
+// are left out.
+struct FolderFile {
+    std::filesystem::path file;
+    std::string inner_path;   // backslash separated; for an unnamed file, its name as in the folder
+    std::uint32_t id = 0;
+};
+[[nodiscard]] Result<std::vector<FolderFile>> folder_files(const std::filesystem::path& folder);
 
 } // namespace npk

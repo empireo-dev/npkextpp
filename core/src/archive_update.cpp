@@ -7,6 +7,9 @@
 #include "npk/paths.hpp"
 
 #include <algorithm>
+#include <cctype>
+#include <iterator>
+#include <optional>
 #include <cstring>
 #include <fstream>
 #include <limits>
@@ -73,9 +76,9 @@ Result<FoundEntry> find_entry(const fs::path& path, std::string_view wanted)
     return make_error(Errc::not_found, std::string(wanted) + " is not in " + to_utf8(path));
 }
 
-Result<Replacement> replace_entry(const fs::path& path, std::uint32_t id, std::span<const std::byte> content)
+Result<ReplaceResult> replace_entries(const fs::path& path, std::span<const Change> changes)
 {
-    Replacement result;
+    ReplaceResult result;
     std::vector<Entry> entries;
     std::uint32_t toc_offset = 0;
     {
@@ -89,70 +92,151 @@ Result<Replacement> replace_entry(const fs::path& path, std::uint32_t id, std::s
         entries = archive->entries();
         result.size_before = archive->file_size();
     }
-    const auto row = std::ranges::find(entries, id, &Entry::id);
-    if (row == entries.end()) return make_error(Errc::not_found, "the file is not in " + to_utf8(path));
     const std::uint64_t toc_end = std::uint64_t{toc_offset} + entries.size() * Entry::kDiskSize;
     if (result.size_before != toc_end) {
         return make_error(Errc::unsupported, to_utf8(path) + " has data after its table of contents; not changed");
     }
-    result.before = *row;
-
-    auto stored = encode(content, row->flags);
-    if (!stored) return std::unexpected(std::move(stored.error()));
-
-    // Room where the old version is: up to the next file's bytes or the table.
-    // Shared with another row (the same bytes listed twice): no room.
-    std::uint64_t room_end = toc_offset;
-    bool shared = false;
-    for (const Entry& other : entries) {
-        if (&other == &*row) continue;
-        if (other.offset == row->offset && other.packed_size != 0) shared = true;
-        if (other.offset > row->offset && other.offset < room_end) room_end = other.offset;
-    }
-    const std::uint64_t room = room_end > row->offset ? room_end - row->offset : 0;
-
-    std::uint64_t offset = row->offset;
-    std::uint64_t new_toc = toc_offset;
-    result.in_place = !shared && stored->size() <= room;
-    if (!result.in_place) {
-        offset = aligned(toc_offset);
-        new_toc = aligned(offset + stored->size());
-    }
-    if (new_toc + entries.size() * Entry::kDiskSize > std::numeric_limits<std::uint32_t>::max()) {
-        return make_error(Errc::unsupported, to_utf8(path) + " would grow over 4 GiB");
-    }
-    *row = make_entry(id, static_cast<std::uint32_t>(offset), content, *stored, row->flags);
-    result.after = *row;
-
-    {
-        std::fstream file(long_path(path), std::ios::in | std::ios::out | std::ios::binary);
-        if (!file) return make_error(Errc::io_error, "cannot open " + to_utf8(path) + " for writing (is the game running?)");
-        const std::vector<std::byte> zeros(kAlign, std::byte{0});
-        bool ok = write_at(file, offset, *stored);
-        if (!result.in_place) {
-            ok = ok && write_at(file, offset + stored->size(), std::span(zeros).first(new_toc - offset - stored->size()));
-            std::vector<std::byte> pointer;
-            put32(pointer, static_cast<std::uint32_t>(new_toc));
-            ok = ok && write_at(file, Archive::kTocOffsetOffset, pointer);
+    std::vector<std::size_t> rows;   // of each change, into entries
+    for (const Change& change : changes) {
+        const auto row = std::ranges::find(entries, change.id, &Entry::id);
+        if (row == entries.end()) return make_error(Errc::not_found, "a file to replace is not in " + to_utf8(path));
+        const auto index = static_cast<std::size_t>(row - entries.begin());
+        if (std::ranges::find(rows, index) != rows.end()) {
+            return make_error(Errc::invalid_input, "the same file is to be replaced twice");
         }
-        ok = ok && write_at(file, new_toc, toc_bytes(entries));
-        file.flush();
-        if (!ok || !file) return make_error(Errc::io_error, "writing " + to_utf8(path) + " failed; the archive may be damaged");
+        rows.push_back(index);
     }
 
-    // Read it back.
+    std::fstream file(long_path(path), std::ios::in | std::ios::out | std::ios::binary);
+    if (!file) return make_error(Errc::io_error, "cannot open " + to_utf8(path) + " for writing (is the game running?)");
+    const std::vector<std::byte> zeros(kAlign, std::byte{0});
+    std::uint64_t end = toc_offset;   // where the next file that does not fit goes
+    std::optional<Error> failure;
+
+    for (std::size_t c = 0; c < changes.size() && !failure; ++c) {
+        Entry& row = entries[rows[c]];
+        Replacement done;
+        done.before = row;
+        auto content = changes[c].load();
+        if (!content) {
+            failure = std::move(content.error());
+            break;
+        }
+        if (content->size() == row.raw_size && murmur3_32(*content) == row.crc_raw) {
+            done.after = row;
+            done.unchanged = true;
+            result.files.push_back(done);
+            continue;
+        }
+        auto stored = encode(*content, row.flags);
+        if (!stored) {
+            failure = std::move(stored.error());
+            break;
+        }
+        // Room where the old version is: up to the next file's bytes or the old
+        // table. Shared with another row (the same bytes listed twice): none.
+        std::uint64_t room_end = toc_offset;
+        bool shared = false;
+        for (const Entry& other : entries) {
+            if (&other == &row) continue;
+            if (other.offset == row.offset && other.packed_size != 0) shared = true;
+            if (other.offset > row.offset && other.offset < room_end) room_end = other.offset;
+        }
+        const std::uint64_t room = room_end > row.offset ? room_end - row.offset : 0;
+        done.in_place = !shared && row.offset < toc_offset && stored->size() <= room;
+        std::uint64_t offset = row.offset;
+        if (!done.in_place) {
+            offset = aligned(end);
+            if (aligned(offset + stored->size()) + entries.size() * Entry::kDiskSize > std::numeric_limits<std::uint32_t>::max()) {
+                failure = Error{Errc::unsupported, to_utf8(path) + " would grow over 4 GiB"};
+                break;
+            }
+            if (!write_at(file, end, std::span(zeros).first(offset - end))) break;
+        }
+        if (!write_at(file, offset, *stored)) break;
+        if (!done.in_place) end = offset + stored->size();
+        row = make_entry(row.id, static_cast<std::uint32_t>(offset), *content, *stored, row.flags);
+        done.after = row;
+        result.files.push_back(done);
+    }
+
+    // The table: where it was, or after the files that went to the end.
+    const std::uint64_t new_toc = end == toc_offset ? toc_offset : aligned(end);
+    bool ok = static_cast<bool>(file);
+    if (ok && new_toc != toc_offset) {
+        std::vector<std::byte> pointer;
+        put32(pointer, static_cast<std::uint32_t>(new_toc));
+        ok = write_at(file, end, std::span(zeros).first(new_toc - end)) && write_at(file, Archive::kTocOffsetOffset, pointer);
+    }
+    ok = ok && write_at(file, new_toc, toc_bytes(entries));
+    file.flush();
+    file.close();
+    if (!ok || file.fail()) return make_error(Errc::io_error, "writing " + to_utf8(path) + " failed; the archive may be damaged");
+    if (failure) {
+        failure->message = "stopped after " + std::to_string(result.files.size()) + " of " +
+                           std::to_string(changes.size()) + " files (those are replaced): " + failure->message;
+        return std::unexpected(std::move(*failure));
+    }
+
+    // Read every replaced file back.
     auto archive = Archive::open(path);
     if (!archive) return std::unexpected(std::move(archive.error()));
     result.size_after = archive->file_size();
-    const Entry* written = archive->find(id);
-    if (written == nullptr) return make_error(Errc::bad_format, "the replaced file is missing after writing");
     Decoder decoder;
-    auto decoded = decoder.read(*archive, *written, true);
-    if (!decoded) return make_error(decoded.error().code, "reading the replaced file back failed: " + decoded.error().message);
-    if (decoded->size() != content.size() || !std::equal(decoded->begin(), decoded->end(), content.begin())) {
-        return make_error(Errc::crc_raw_mismatch, "the replaced file reads back differently");
+    for (std::size_t c = 0; c < result.files.size(); ++c) {
+        if (result.files[c].unchanged) continue;
+        const Entry* written = archive->find(result.files[c].after.id);
+        if (written == nullptr) return make_error(Errc::bad_format, "a replaced file is missing after writing");
+        auto decoded = decoder.read(*archive, *written, true);
+        auto content = changes[c].load();
+        if (!decoded || !content || *decoded != *content) {
+            return make_error(Errc::crc_raw_mismatch, "a replaced file reads back differently" +
+                                                          (decoded ? std::string() : ": " + decoded.error().message));
+        }
     }
     return result;
+}
+
+Result<ReplaceResult> replace_entry(const fs::path& path, std::uint32_t id, std::span<const std::byte> content)
+{
+    const std::vector<std::byte> copy(content.begin(), content.end());
+    const Change change{id, [&copy]() -> Result<std::vector<std::byte>> { return copy; }};
+    return replace_entries(path, std::span(&change, 1));
+}
+
+Result<std::vector<FolderFile>> folder_files(const fs::path& folder)
+{
+    std::error_code error;
+    if (!fs::is_directory(folder, error)) return make_error(Errc::not_found, "folder not found: " + to_utf8(folder));
+    std::vector<FolderFile> files;
+    fs::recursive_directory_iterator it(folder, error);
+    for (; !error && it != fs::recursive_directory_iterator(); it.increment(error)) {
+        const fs::path relative = it->path().lexically_relative(folder);
+        const std::string first = to_utf8(*relative.begin());
+        std::error_code type_error;
+        if (it->is_directory(type_error) && relative.begin() != relative.end() && std::next(relative.begin()) == relative.end() &&
+            (first == "_archives" || first == "_overridden")) {
+            it.disable_recursion_pending();
+            continue;
+        }
+        if (!it->is_regular_file(type_error)) continue;
+        std::string inner = with_backslashes(to_utf8(relative));
+        FolderFile entry{it->path(), inner, path_id(inner)};
+        // _unnamed/0123abcd.ext: the id itself.
+        if (first == "_unnamed" && std::next(relative.begin()) != relative.end() &&
+            std::next(std::next(relative.begin())) == relative.end()) {
+            const std::string name = to_utf8(relative.filename());
+            const std::string digits = name.substr(0, 8);
+            if (digits.size() == 8 && std::ranges::all_of(digits, [](char c) { return std::isxdigit(static_cast<unsigned char>(c)) != 0; }) &&
+                (name.size() == 8 || name[8] == '.')) {
+                entry.id = static_cast<std::uint32_t>(std::stoul(digits, nullptr, 16));
+            }
+        }
+        files.push_back(std::move(entry));
+    }
+    if (error) return make_error(Errc::io_error, "cannot read the folder " + to_utf8(folder) + ": " + error.message());
+    std::ranges::sort(files, {}, &FolderFile::inner_path);
+    return files;
 }
 
 } // namespace npk
