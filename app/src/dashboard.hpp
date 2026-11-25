@@ -12,6 +12,7 @@
 
 #include <chrono>
 #include <cstdint>
+#include <deque>
 #include <span>
 #include <string>
 #include <string_view>
@@ -30,9 +31,13 @@ public:
     Dashboard(const npk::Plan& plan, std::span<const std::string> missing, const npk::pipeline::Progress& progress,
               npk::pipeline::DiskKind disk);
 
-    // One live frame, at most `rows` rows high: when the archives don't fit,
-    // finished ones are folded into one line and the waiting ones are cut short.
+    // One live frame, at most `rows` rows high. When the archives don't fit, the
+    // list shows a window of them that follows the archive being unpacked, or
+    // stays where the user scrolled it.
     [[nodiscard]] ftxui::Element frame(int width, int rows);
+
+    enum class Scroll { line_up, line_down, page_up, page_down, top, bottom, follow };
+    void scroll(Scroll how, int lines = 1);
 
     // Every archive (for the end of the run, or a log without a terminal).
     // `finished`: the run is over, so archives not done were not reached.
@@ -53,10 +58,13 @@ private:
         bool missing = false;
     };
     enum class State { waiting, active, done, failed, existing, missing, not_reached };
-    struct Cell {   // one place in the archive list: an archive, or a line standing for several
+    struct Cell {   // one place in the archive list
         const Archive* archive = nullptr;
-        std::string text;
         State state = State::waiting;
+    };
+    struct Sample {   // for the time left
+        Clock::time_point at;
+        double work = 0;   // done so far, in work units
     };
 
     void measure();   // updates the rates
@@ -64,7 +72,7 @@ private:
     [[nodiscard]] double eta_seconds(std::uint64_t files_left, std::uint64_t bytes_left) const;
     [[nodiscard]] ftxui::Element pipeline_box() const;
     [[nodiscard]] ftxui::Element progress_box() const;
-    [[nodiscard]] ftxui::Element archives_box(int width, int rows, bool finished) const;
+    [[nodiscard]] ftxui::Element archives_box(int width, int rows, bool finished);
     [[nodiscard]] ftxui::Element cell(const Cell& cell, int width) const;
 
     const npk::pipeline::Progress& progress_;
@@ -77,10 +85,16 @@ private:
 
     Clock::time_point started_ = Clock::now();
     Clock::time_point sampled_at_ = started_;
-    std::uint64_t sampled_files_ = 0;
     std::uint64_t sampled_bytes_ = 0;
-    double work_rate_ = 0;   // work units per second (smoothed), see eta_seconds()
-    double byte_rate_ = 0;   // bytes per second (smoothed)
+    double byte_rate_ = 0;          // bytes per second, over the last few seconds (shown)
+    std::deque<Sample> samples_;    // one a second, the last 5 minutes
+    double work_rate_ = 0;          // work units per second, recent seconds weighted most (time left)
+
+    // The archive list's window: its first row, and how it was laid out last.
+    int top_row_ = 0;
+    bool follow_ = true;
+    int shown_rows_ = 0;
+    int total_rows_ = 0;
 };
 
 } // namespace npkextpp

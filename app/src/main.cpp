@@ -285,7 +285,7 @@ void show_summary(Console& console, const npk::Plan& plan, const npk::pipeline::
     if (summary.bytes_written > 0) {
         how = format_bytes(static_cast<std::uint64_t>(rate)) + "/s, ";
         if (summary.disk != npk::pipeline::DiskKind::unknown) how += std::string(npk::pipeline::name_of(summary.disk)) + ", ";
-        how += std::to_string(summary.writers) + " writers, " + std::to_string(summary.read_block >> 20) + " MiB reads";
+        how += std::to_string(summary.writers) + (summary.writers == 1 ? " writer, " : " writers, ") + std::to_string(summary.read_block >> 20) + " MiB reads";
     }
     console.line("\nDone in " + format_duration(summary.seconds) + " (" + how + "). Output: " + npk::to_utf8(out));
     console.line("_archives/ records every archive and where each of its files went; see _archives/README.txt.");
@@ -344,13 +344,15 @@ int extract_entry(Console& console, npk::Plan& plan, std::string wanted, const f
 // --- 4b. Everything ---------------------------------------------------------------------------
 
 // Redraws the live frame every 50 ms (a terminal), or prints a progress line
-// every 10 s (a log), until stopped. Every tick checks for Ctrl+C.
+// every 10 s (a log), until stopped. Every tick checks for Ctrl+C; between
+// ticks, keys and the mouse wheel scroll the archive list.
 void show_live(Console& console, Dashboard& dashboard, std::stop_token stop, const std::function<void()>& on_tick)
 {
     using namespace std::chrono_literals;
-    std::mutex sleep_mutex;
-    std::condition_variable_any sleeper;
+    using Key = Console::Key;
+    using Scroll = Dashboard::Scroll;
     auto next_line = std::chrono::steady_clock::now() + 10s;
+    if (console.interactive()) console.start_input();
     while (!stop.stop_requested()) {
         on_tick();
         if (console.interactive()) {
@@ -359,9 +361,21 @@ void show_live(Console& console, Dashboard& dashboard, std::stop_token stop, con
             console.line(dashboard.progress_line());
             next_line += 10s;
         }
-        std::unique_lock lock(sleep_mutex);
-        sleeper.wait_for(lock, stop, 50ms, [] { return false; });
+        for (const Key key : console.read_keys(50ms)) {
+            switch (key) {
+            case Key::up: dashboard.scroll(Scroll::line_up); break;
+            case Key::down: dashboard.scroll(Scroll::line_down); break;
+            case Key::wheel_up: dashboard.scroll(Scroll::line_up, 3); break;
+            case Key::wheel_down: dashboard.scroll(Scroll::line_down, 3); break;
+            case Key::page_up: dashboard.scroll(Scroll::page_up); break;
+            case Key::page_down: dashboard.scroll(Scroll::page_down); break;
+            case Key::home: dashboard.scroll(Scroll::top); break;
+            case Key::end: dashboard.scroll(Scroll::bottom); break;
+            case Key::follow: dashboard.scroll(Scroll::follow); break;
+            }
+        }
     }
+    console.stop_input();
 }
 
 int run(const CliOptions& options, Console& console)

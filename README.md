@@ -43,10 +43,16 @@ What the screen shows, in a terminal (redrawn every 50 ms, drawn with
    sets them, and for the reader, the decoders and the writers the share of the
    last 2 s spent busy, starved (waiting for input) and blocked (waiting for
    output), with the average time per block or file;
-4. **Progress:** a bar, the percentage, files and bytes done, speed, ETA;
+4. **Progress:** a bar, the percentage, elapsed time and ETA, files and bytes done, speed;
 5. **Archives:** every archive in two columns (one on a narrow terminal), each with
    its own bar, files done and ETA; missing ones are marked. When they don't fit
-   the terminal, finished ones fold into one line and the waiting ones are cut short.
+   the terminal, the list shows a window of them that follows the archive being
+   unpacked; the mouse wheel, the arrow keys, PgUp/PgDn and Home/End scroll it, and
+   F follows progress again.
+
+The ETA comes from the work done in each second of the last 5 minutes
+(bytes, plus 64 KiB for each file), weighted by (1 - age / 5 min)², so the last
+minute counts most and a stall of a few seconds hardly moves it.
 
 Redirected to a file, it prints the same without colours, a progress line every
 10 s instead of the live part, and the archive list at the end.

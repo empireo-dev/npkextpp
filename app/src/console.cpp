@@ -7,6 +7,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <string>
+#include <thread>
 
 #if defined(_WIN32)
 #ifndef WIN32_LEAN_AND_MEAN
@@ -20,6 +21,8 @@
 #define NPK_ISATTY(fd) _isatty(fd)
 #define NPK_FILENO(f) _fileno(f)
 #else
+#include <poll.h>
+#include <termios.h>
 #include <unistd.h>
 #define NPK_ISATTY(fd) ::isatty(fd)
 #define NPK_FILENO(f) ::fileno(f)
@@ -124,7 +127,185 @@ std::string format_duration(double seconds)
     return text;
 }
 
+// --- Input -----------------------------------------------------------------------
+
+#if defined(_WIN32)
+
+struct Console::Input {
+    HANDLE handle = INVALID_HANDLE_VALUE;
+    DWORD saved_mode = 0;
+};
+
+void Console::start_input()
+{
+    if (!interactive_ || input_) return;
+    const HANDLE handle = ::GetStdHandle(STD_INPUT_HANDLE);
+    DWORD mode = 0;
+    if (handle == INVALID_HANDLE_VALUE || !::GetConsoleMode(handle, &mode)) return;
+    // Mouse events instead of Quick Edit selection; Ctrl+C still raises SIGINT.
+    if (!::SetConsoleMode(handle, ENABLE_EXTENDED_FLAGS | ENABLE_MOUSE_INPUT | ENABLE_PROCESSED_INPUT)) return;
+    input_ = std::make_unique<Input>(Input{handle, mode});
+}
+
+void Console::stop_input()
+{
+    if (!input_) return;
+    ::SetConsoleMode(input_->handle, input_->saved_mode);
+    input_.reset();
+}
+
+std::vector<Console::Key> Console::read_keys(std::chrono::milliseconds timeout)
+{
+    std::vector<Key> keys;
+    if (!input_) {
+        std::this_thread::sleep_for(timeout);
+        return keys;
+    }
+    if (::WaitForSingleObject(input_->handle, static_cast<DWORD>(timeout.count())) != WAIT_OBJECT_0) return keys;
+    INPUT_RECORD records[64];
+    DWORD count = 0;
+    if (!::ReadConsoleInputW(input_->handle, records, 64, &count)) return keys;
+    for (DWORD i = 0; i < count; ++i) {
+        const INPUT_RECORD& record = records[i];
+        if (record.EventType == KEY_EVENT && record.Event.KeyEvent.bKeyDown) {
+            switch (record.Event.KeyEvent.wVirtualKeyCode) {
+            case VK_UP: keys.push_back(Key::up); break;
+            case VK_DOWN: keys.push_back(Key::down); break;
+            case VK_PRIOR: keys.push_back(Key::page_up); break;
+            case VK_NEXT: keys.push_back(Key::page_down); break;
+            case VK_HOME: keys.push_back(Key::home); break;
+            case VK_END: keys.push_back(Key::end); break;
+            case 'F': keys.push_back(Key::follow); break;
+            default: break;
+            }
+        } else if (record.EventType == MOUSE_EVENT && (record.Event.MouseEvent.dwEventFlags & MOUSE_WHEELED)) {
+            const auto delta = static_cast<short>(HIWORD(record.Event.MouseEvent.dwButtonState));
+            keys.push_back(delta > 0 ? Key::wheel_up : Key::wheel_down);
+        }
+    }
+    return keys;
+}
+
+#else
+
+namespace {
+constexpr const char* kMouseOn = "\x1B[?1000h\x1B[?1006h\x1B[?25l";    // report buttons and the wheel (SGR), hide the cursor
+constexpr const char* kMouseOff = "\x1B[?1006l\x1B[?1000l\x1B[?25h";
+} // namespace
+
+struct Console::Input {
+    termios saved{};
+    std::string pending;   // bytes of a sequence not complete yet
+};
+
+void Console::start_input()
+{
+    if (!interactive_ || input_ || ::isatty(STDIN_FILENO) == 0) return;
+    termios saved{};
+    if (::tcgetattr(STDIN_FILENO, &saved) != 0) return;
+    termios raw = saved;
+    raw.c_lflag &= static_cast<tcflag_t>(~(ICANON | ECHO));   // ISIG stays: Ctrl+C still interrupts
+    raw.c_cc[VMIN] = 0;
+    raw.c_cc[VTIME] = 0;
+    if (::tcsetattr(STDIN_FILENO, TCSANOW, &raw) != 0) return;
+    input_ = std::make_unique<Input>(Input{saved, {}});
+    std::lock_guard lock(mutex_);
+    std::fputs(kMouseOn, stdout);
+    std::fflush(stdout);
+}
+
+void Console::stop_input()
+{
+    if (!input_) return;
+    ::tcsetattr(STDIN_FILENO, TCSANOW, &input_->saved);
+    input_.reset();
+    std::lock_guard lock(mutex_);
+    std::fputs(kMouseOff, stdout);
+    std::fflush(stdout);
+}
+
+namespace {
+
+// Takes the keys out of `bytes`, leaving an incomplete sequence at its end.
+void parse_keys(std::string& bytes, std::vector<Console::Key>& keys, bool more_may_come)
+{
+    using Key = Console::Key;
+    std::size_t i = 0;
+    while (i < bytes.size()) {
+        const char c = bytes[i];
+        if (c != '\x1B') {
+            if (c == 'f' || c == 'F') keys.push_back(Key::follow);
+            ++i;
+            continue;
+        }
+        if (i + 1 >= bytes.size()) {
+            if (more_may_come) break;   // maybe the start of a sequence
+            ++i;                        // a lone Esc
+            continue;
+        }
+        const char kind = bytes[i + 1];
+        if (kind != '[' && kind != 'O') {
+            i += 1;
+            continue;
+        }
+        // ESC [ parameters final, or ESC O final (application cursor keys)
+        std::size_t end = i + 2;
+        while (end < bytes.size() && !(bytes[end] >= 0x40 && bytes[end] <= 0x7E)) ++end;
+        if (end >= bytes.size()) {
+            if (more_may_come) break;
+            i = end;
+            continue;
+        }
+        const std::string params = bytes.substr(i + 2, end - i - 2);
+        const char final = bytes[end];
+        if (final == 'A') keys.push_back(Key::up);
+        else if (final == 'B') keys.push_back(Key::down);
+        else if (final == 'H') keys.push_back(Key::home);
+        else if (final == 'F') keys.push_back(Key::end);
+        else if (final == '~') {
+            if (params == "5") keys.push_back(Key::page_up);
+            else if (params == "6") keys.push_back(Key::page_down);
+            else if (params == "1" || params == "7") keys.push_back(Key::home);
+            else if (params == "4" || params == "8") keys.push_back(Key::end);
+        } else if ((final == 'M' || final == 'm') && !params.empty() && params[0] == '<') {
+            const int button = std::atoi(params.c_str() + 1) & ~(4 | 8 | 16);   // without Shift, Alt, Ctrl
+            if (button == 64) keys.push_back(Key::wheel_up);
+            else if (button == 65) keys.push_back(Key::wheel_down);
+        }
+        i = end + 1;
+    }
+    bytes.erase(0, i);
+}
+
+} // namespace
+
+std::vector<Console::Key> Console::read_keys(std::chrono::milliseconds timeout)
+{
+    std::vector<Key> keys;
+    if (!input_) {
+        std::this_thread::sleep_for(timeout);
+        return keys;
+    }
+    pollfd in{STDIN_FILENO, POLLIN, 0};
+    if (::poll(&in, 1, static_cast<int>(timeout.count())) <= 0) {
+        parse_keys(input_->pending, keys, false);   // a lone Esc, nothing came after it
+        return keys;
+    }
+    char buffer[256];
+    const ssize_t got = ::read(STDIN_FILENO, buffer, sizeof buffer);
+    if (got > 0) input_->pending.append(buffer, static_cast<std::size_t>(got));
+    parse_keys(input_->pending, keys, true);
+    return keys;
+}
+
+#endif
+
 Console::Console() : interactive_(is_terminal()) {}
+
+Console::~Console()
+{
+    stop_input();
+}
 
 int Console::width() const
 {
