@@ -114,7 +114,7 @@ Summary run(Plan& plan, const Options& options, Progress& progress, std::stop_to
     progress.writers_active.store(writers);
     progress.read_block_kib.store(static_cast<std::uint32_t>(ctx.tunables.read_block.load() >> 10));
 
-    if (auto error = create_folders(ctx)) {
+    if (auto error = options.fake_disk ? std::nullopt : create_folders(ctx)) {
         summary.fatal = std::move(error);
     } else {
         raise_open_file_limit();

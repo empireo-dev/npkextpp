@@ -84,6 +84,14 @@ python3 tests/bench/run_bench.py --npkext ../npkext --install build/bench/instal
     --core build/tests/core_extract --app build/app/npkextpp
 ```
 
+The tuner against a simulated SSD or HDD, writing nothing
+([docs/simulated_disk.md](docs/simulated_disk.md)):
+
+```bash
+build/tests/tune_sim --disk ssd --curve --file-size 65536
+build/tests/tune_sim --disk hdd --install build/bench/install --set switch_cost=300us
+```
+
 ## Using the core from another project
 
 ```cmake

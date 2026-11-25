@@ -16,3 +16,10 @@ endif()
 add_executable(core_extract tools/core_extract.cpp)
 target_link_libraries(core_extract PRIVATE npk::core)
 npk_target_warnings(core_extract)
+
+# The pipeline and tuner against a simulated disk (docs/simulated_disk.md).
+if(NPKEXTPP_BUILD_PIPELINE)
+    add_executable(tune_sim tools/tune_sim.cpp sim/simulated_disk.cpp)
+    target_link_libraries(tune_sim PRIVATE npk::pipeline CLI11::CLI11)
+    npk_target_warnings(tune_sim)
+endif()

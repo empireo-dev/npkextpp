@@ -73,7 +73,8 @@ public:
 
 private:
     void run(unsigned index, StageClock& clock);
-    void write(WriteJob& job);
+    void write(unsigned index, WriteJob& job);
+    void written(WriteJob& job);   // marks the entry written and counts it
     void fail_write(WriteJob& job, const std::filesystem::path& path, Error error);
 
     Context& ctx_;

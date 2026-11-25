@@ -49,7 +49,7 @@ void WriterPool::run(unsigned index, StageClock& clock)
         std::optional<WriteJob> job = ctx_.write_queue.pop(stop);
         if (!job) break;
         clock.enter(StageState::working);
-        write(*job);
+        write(index, *job);
     }
     clock.enter(StageState::parked);
 }
@@ -62,8 +62,13 @@ void WriterPool::fail_write(WriteJob& job, const fs::path& path, Error error)
     ctx_.fail(*job.planned, "cannot write " + job.path + ": " + error.message);
 }
 
-void WriterPool::write(WriteJob& job)
+void WriterPool::write(unsigned index, WriteJob& job)
 {
+    if (FakeDisk* disk = ctx_.options.fake_disk) {
+        disk->write_file(index, job.data.size());
+        return written(job);
+    }
+
     fs::path path = ctx_.output_root / from_utf8(job.path);
 #if defined(_WIN32)
     path.make_preferred();   // extended-length paths take backslashes only
@@ -87,7 +92,11 @@ void WriterPool::write(WriteJob& job)
     }
     file->start_writeback();
     ctx_.writeback.submit(std::move(*file), job.data.size());
+    written(job);
+}
 
+void WriterPool::written(WriteJob& job)
+{
     PlannedEntry& planned = *job.planned;
     if (planned.unnamed) planned.path = job.path;   // now with its extension, for the index
     planned.status = EntryStatus::written;

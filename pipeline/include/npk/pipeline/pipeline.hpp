@@ -1,6 +1,7 @@
 #pragma once
 
 #include "npk/error.hpp"
+#include "npk/pipeline/fake_disk.hpp"
 #include "npk/pipeline/progress.hpp"
 #include "npk/plan.hpp"
 
@@ -25,6 +26,10 @@ struct Options {
     unsigned decoder_threads = 0;    // 0 = one per hardware thread
     unsigned initial_writers = 2;    // low enough for hard disks; the tuner climbs on faster ones
     bool adaptive = true;            // run the tuner
+
+    // Tests only: writers hand file sizes to this instead of writing files, and
+    // no output folders are created. See docs/simulated_disk.md.
+    FakeDisk* fake_disk = nullptr;
 
     // Tuner decisions and other details, one line each, from a pipeline thread.
     std::function<void(std::string_view)> log;

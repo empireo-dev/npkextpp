@@ -106,7 +106,11 @@ void Reader::read_source(ArchiveSource& source)
             for (const ChunkEntry& entry : chunk->entries) ctx_.fail(*entry.planned, read.error().message);
             continue;
         }
-        file->forget(start, size);   // the bytes are in our buffer now; never read again
+        if (FakeDisk* disk = ctx_.options.fake_disk) {
+            disk->read(size);   // keep the pages cached: the next run reads them from RAM
+        } else {
+            file->forget(start, size);   // the bytes are in our buffer now; never read again
+        }
         ctx_.progress.bytes_read.fetch_add(size, std::memory_order_relaxed);
 
         mark_shared(chunk->entries);

@@ -316,6 +316,8 @@ written.
   - a fatal error forced by a read-only output folder.
 - `compare_with_npkext.py --extractor build/app/npkextpp` runs the real executable
   against npkext on random installations, including the `_archives/` index.
+- `tune_sim` runs the pipeline and the tuner against a simulated SSD or HDD
+  (`docs/simulated_disk.md`), for tuner work without real disks.
 
 ## 12. Later
 
