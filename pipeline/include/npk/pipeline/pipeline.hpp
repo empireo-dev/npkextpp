@@ -5,21 +5,47 @@
 #include "npk/plan.hpp"
 
 #include <cstddef>
+#include <cstdint>
+#include <filesystem>
 #include <functional>
-#include <string>
+#include <optional>
+#include <stop_token>
+#include <string_view>
 
 namespace npk::pipeline {
 
+// See docs/pipeline.md for how the pipeline works.
 struct Options {
-    bool verify = true;              // check crc_packed and crc_raw
-    std::size_t memory_budget = 0;   // 0 = automatic (min(1 GiB, RAM / 8))
-    std::function<void(const std::string&)> log;   // tuner decisions etc.
+    std::filesystem::path output_root;
+    bool verify = true;              // check crc_packed and crc_raw of every entry
+    bool write_index = true;         // write _archives/ when done (also after a stop)
+
+    // Defaults suit real use; tests change them.
+    std::size_t memory_budget = 0;   // bytes for read + decoded data; 0 = min(1 GiB, RAM / 8)
+    unsigned decoder_threads = 0;    // 0 = one per hardware thread
+    unsigned initial_writers = 2;    // low enough for hard disks; the tuner climbs on faster ones
+    bool adaptive = true;            // run the tuner
+
+    // Tuner decisions and other details, one line each, from a pipeline thread.
+    std::function<void(std::string_view)> log;
 };
 
-// Extracts every entry of the plan on all cores. Creates the folders, runs
-// Reader → Decoders → Writers with the Tuner alongside, then writes the index.
-// Per-entry results end up in PlannedEntry::status; only fatal errors (output
-// unwritable, disk full) are returned.
-[[nodiscard]] Result<void> run(Plan& plan, const Options& options, Progress& progress);
+struct Summary {
+    std::uint64_t files_written = 0;
+    std::uint64_t files_failed = 0;
+    std::uint64_t files_not_reached = 0;   // stopped before they were written
+    std::uint64_t bytes_written = 0;
+    double seconds = 0;
+    bool cancelled = false;                // the caller's stop token fired
+    std::optional<Error> fatal;            // what stopped the run (disk full, ...)
+    std::optional<Error> index_error;      // _archives/ could not be written
+    unsigned writers = 0;                  // the tuner's final choices
+    std::size_t read_block = 0;
+};
+
+// Extracts every entry of the plan that is to be written, on all cores. Each
+// entry's status (and error) is set in the plan; skipped entries are left alone.
+// `cancel` stops the run early (e.g. Ctrl+C).
+[[nodiscard]] Summary run(Plan& plan, const Options& options, Progress& progress, std::stop_token cancel = {});
 
 } // namespace npk::pipeline

@@ -7,7 +7,7 @@ add_test(NAME core_tests COMMAND core_tests)
 
 if(NPKEXTPP_BUILD_PIPELINE)
     add_executable(pipeline_tests pipeline_tests.cpp)
-    target_link_libraries(pipeline_tests PRIVATE npk::pipeline)
+    target_link_libraries(pipeline_tests PRIVATE npk::pipeline npk::lz4 npk::zstd npk::libdeflate)
     npk_target_warnings(pipeline_tests)
     add_test(NAME pipeline_tests COMMAND pipeline_tests)
 endif()

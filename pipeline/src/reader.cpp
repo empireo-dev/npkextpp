@@ -1,25 +1,139 @@
-#include "npk/pipeline/reader.hpp"
+#include "stages.hpp"
+
+#include "npk/input_file.hpp"
+#include "npk/paths.hpp"
+
+#include <algorithm>
 
 namespace npk::pipeline {
 
-Reader::Reader(Plan& plan, ByteBudget& budget, BoundedQueue<DecodeTask>& out,
-               const Tunables& tunables, Progress& progress)
-    : plan_(plan)
-    , budget_(budget)
-    , out_(out)
-    , tunables_(tunables)
-    , progress_(progress)
+namespace {
+
+std::uint64_t end_of(const Entry& entry) { return std::uint64_t{entry.offset} + entry.packed_size; }
+
+// Entries whose stored bytes overlap another entry's in the same chunk must be
+// decoded from a copy: decryption works in place. Entries are in offset order.
+void mark_shared(std::vector<ChunkEntry>& entries)
 {
+    for (std::size_t a = 0; a < entries.size(); ++a) {
+        const Entry& ea = *entries[a].entry;
+        if (ea.packed_size == 0) continue;
+        for (std::size_t b = a + 1; b < entries.size(); ++b) {
+            const Entry& eb = *entries[b].entry;
+            if (eb.offset >= end_of(ea)) break;   // sorted by offset: nothing further can overlap a
+            if (eb.packed_size == 0) continue;
+            entries[a].shared = true;
+            entries[b].shared = true;
+        }
+    }
 }
 
-void Reader::run(std::stop_token stop)
+} // namespace
+
+void Reader::run()
 {
-    (void)stop;
-    (void)plan_;
-    (void)budget_;
-    (void)tunables_;
-    (void)progress_;
-    out_.close(); // TODO
+    clock_.enter(StageState::working);
+    const std::stop_token stop = ctx_.stop.get_token();
+    for (OutputGroup& group : ctx_.plan.groups) {
+        for (ArchiveSource& source : group.sources) {
+            if (stop.stop_requested()) break;
+            read_source(source);
+        }
+    }
+    ctx_.decode_queue.close();
+    clock_.enter(StageState::waiting_input);
+}
+
+void Reader::read_source(ArchiveSource& source)
+{
+    // The entries to write, in storage order (the plan keeps them sorted by offset).
+    std::vector<PlannedEntry*> todo;
+    for (PlannedEntry& planned : source.entries) {
+        if (planned.disposition != Disposition::skip && planned.status == EntryStatus::pending) todo.push_back(&planned);
+    }
+    if (todo.empty()) return;
+
+    ctx_.progress.current_source.store(&source, std::memory_order_relaxed);
+    ctx_.progress.archives_started.fetch_add(1, std::memory_order_relaxed);
+
+    auto file = InputFile::open(source.path);
+    if (!file) {
+        for (PlannedEntry* planned : todo) ctx_.fail(*planned, file.error().message);
+        return;
+    }
+    file->advise_sequential();
+
+    // Entries whose bytes are not inside the file fail on their own.
+    std::erase_if(todo, [&](PlannedEntry* planned) {
+        if (end_of(source.entry(*planned)) <= file->size()) return false;
+        ctx_.fail(*planned, "data runs past the end of " + to_utf8(source.path.filename()));
+        return true;
+    });
+
+    const std::stop_token stop = ctx_.stop.get_token();
+    std::size_t i = 0;
+    while (i < todo.size() && !stop.stop_requested()) {
+        // Merge neighbours into one read of at most read_block bytes.
+        const std::uint64_t block = ctx_.tunables.read_block.load(std::memory_order_relaxed);
+        const std::uint64_t start = source.entry(*todo[i]).offset;
+        std::uint64_t end = end_of(source.entry(*todo[i]));
+        std::size_t j = i + 1;
+        while (j < todo.size()) {
+            const Entry& next = source.entry(*todo[j]);
+            const std::uint64_t gap = next.offset > end ? next.offset - end : 0;
+            const std::uint64_t new_end = std::max(end, end_of(next));
+            if (gap > kMaxGap || new_end - start > block) break;
+            end = new_end;
+            ++j;
+        }
+        const std::size_t size = static_cast<std::size_t>(end - start);
+
+        clock_.enter(StageState::waiting_output);
+        if (!ctx_.read_budget.acquire(size, stop)) return;
+        clock_.enter(StageState::working);
+
+        auto chunk = std::make_shared<ReadChunk>();
+        chunk->lease = BudgetLease(ctx_.read_budget, size);
+        chunk->source = &source;
+        chunk->file_offset = start;
+        chunk->size = size;
+        chunk->data = std::make_unique_for_overwrite<std::byte[]>(size);
+        chunk->entries.reserve(j - i);
+        for (std::size_t k = i; k < j; ++k) chunk->entries.push_back({todo[k], &source.entry(*todo[k]), false});
+        i = j;
+
+        if (auto read = file->read_at(start, {chunk->data.get(), size}); !read) {
+            for (const ChunkEntry& entry : chunk->entries) ctx_.fail(*entry.planned, read.error().message);
+            continue;
+        }
+        file->forget(start, size);   // the bytes are in our buffer now; never read again
+        ctx_.progress.bytes_read.fetch_add(size, std::memory_order_relaxed);
+
+        mark_shared(chunk->entries);
+        if (!emit(std::move(chunk))) return;
+    }
+}
+
+// Cuts a chunk into tasks of about kTaskBytes of stored data.
+bool Reader::emit(std::shared_ptr<ReadChunk> chunk)
+{
+    const std::stop_token stop = ctx_.stop.get_token();
+    const auto count = static_cast<std::uint32_t>(chunk->entries.size());
+    std::uint32_t first = 0;
+    while (first < count) {
+        std::uint32_t last = first;
+        std::uint64_t bytes = 0;
+        while (last < count && (last == first || bytes < kTaskBytes)) {
+            bytes += chunk->entries[last].entry->packed_size;
+            ++last;
+        }
+        clock_.enter(StageState::waiting_output);
+        const bool pushed = ctx_.decode_queue.push(DecodeTask{chunk, first, last - first}, stop);
+        clock_.enter(StageState::working);
+        if (!pushed) return false;
+        first = last;
+    }
+    return true;
 }
 
 } // namespace npk::pipeline

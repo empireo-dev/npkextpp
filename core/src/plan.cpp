@@ -294,7 +294,6 @@ Plan Planner::build(std::span<const fs::path> archives, const PlanOptions& optio
 
     // 3. Decide every entry.
     LabelTable labels;
-    std::set<std::string> directories;
     for (OutputGroup& group : plan.groups) {
         const bool has_nested = nested.has_any_below(group.folder);
         std::unordered_map<std::uint32_t, std::int32_t> provided;   // id -> label of the source that writes it
@@ -306,7 +305,6 @@ Plan Planner::build(std::span<const fs::path> archives, const PlanOptions& optio
 
             for (PlannedEntry& planned : source.entries) {
                 const Entry& entry = source.toc[planned.toc_index];
-                plan.totals.entries += 1;
 
                 std::optional<std::string> name;
                 if (const auto inner = names.find(entry.id)) name = safe_relative_path(*inner);
@@ -320,7 +318,6 @@ Plan Planner::build(std::span<const fs::path> archives, const PlanOptions& optio
 
                 if (winner >= 0) {
                     planned.replaced_by = winner;
-                    plan.totals.overridden += 1;
                     if (!options.keep_overridden) {
                         planned.disposition = Disposition::skip;
                         continue;
@@ -334,14 +331,54 @@ Plan Planner::build(std::span<const fs::path> archives, const PlanOptions& optio
                     inner = std::string(kOverriddenFolder) + "/" + folder_tag(source.label()) + "/" + inner;
                 } else {
                     provided.emplace(entry.id, self);
-                    if (planned.unnamed) plan.totals.unnamed += 1;
                 }
                 planned.path = group.folder + "/" + inner;
+            }
+        }
+    }
 
-                directories.insert(parent_folder(planned.path));
+    // 4. One entry per output path: writes run in parallel, so two entries for one
+    //    path would race. npkext wrote them one after the other, so the last one in
+    //    plan order is what it left on disk; keep that one. (Happens only in odd
+    //    layouts: a parent and a nested archive both keeping a file, or names that
+    //    differ only in case on a case-insensitive filesystem.)
+    std::unordered_map<std::string, std::pair<PlannedEntry*, std::int32_t>> by_path;
+    for (OutputGroup& group : plan.groups) {
+        for (ArchiveSource& source : group.sources) {
+            const std::int32_t self = labels.index(source.label());
+            for (PlannedEntry& planned : source.entries) {
+                if (planned.disposition == Disposition::skip) continue;
+#if defined(_WIN32)
+                std::string key = lower_ascii(planned.path);
+#else
+                const std::string& key = planned.path;
+#endif
+                const auto [it, added] = by_path.try_emplace(key, &planned, self);
+                if (!added) {
+                    PlannedEntry& earlier = *it->second.first;
+                    earlier.disposition = Disposition::skip;
+                    earlier.replaced_by = self;
+                    earlier.path.clear();
+                    it->second = {&planned, self};
+                }
+            }
+        }
+    }
+
+    // 5. Totals and the folders to create.
+    std::set<std::string> directories;
+    for (const OutputGroup& group : plan.groups) {
+        for (const ArchiveSource& source : group.sources) {
+            for (const PlannedEntry& planned : source.entries) {
+                plan.totals.entries += 1;
+                if (planned.replaced_by >= 0) plan.totals.overridden += 1;
+                if (planned.disposition == Disposition::skip) continue;
+                const Entry& entry = source.entry(planned);
+                if (planned.unnamed && planned.disposition == Disposition::write) plan.totals.unnamed += 1;
                 plan.totals.files_to_write += 1;
                 plan.totals.packed_bytes += entry.packed_size;
                 plan.totals.raw_bytes += entry.raw_size;
+                directories.insert(parent_folder(planned.path));
             }
         }
     }

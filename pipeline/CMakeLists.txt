@@ -7,10 +7,10 @@ include("${PROJECT_SOURCE_DIR}/cmake/NpkWarnings.cmake")
 add_library(npk_pipeline STATIC
     src/byte_budget.cpp
     src/stage_clock.cpp
+    src/writeback.cpp
     src/reader.cpp
     src/decoder_pool.cpp
     src/writer_pool.cpp
-    src/writeback.cpp
     src/tuner.cpp
     src/index_writer.cpp
     src/pipeline.cpp
@@ -22,6 +22,9 @@ else()
 endif()
 add_library(npk::pipeline ALIAS npk_pipeline)
 
-target_include_directories(npk_pipeline PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/include")
+target_include_directories(npk_pipeline
+    PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/include"
+    PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src"
+)
 target_link_libraries(npk_pipeline PUBLIC npk::core Threads::Threads)
 npk_target_warnings(npk_pipeline)

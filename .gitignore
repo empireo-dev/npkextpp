@@ -1,0 +1,31 @@
+# CMake build trees and generated files
+/build/
+/build-*/
+/cmake-build-*/
+/out/
+CMakeUserPresets.json
+CMakeFiles/
+CMakeCache.txt
+cmake_install.cmake
+compile_commands.json
+
+# Editor caches and local state (shared VS Code configuration is tracked)
+/.cache/
+/.vs/
+*.code-workspace
+
+# Compiled artifacts
+*.o
+*.obj
+*.a
+*.lib
+*.so
+*.so.*
+*.dll
+*.exe
+*.pdb
+*.ilk
+
+# OS files
+.DS_Store
+Thumbs.db

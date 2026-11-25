@@ -15,7 +15,10 @@ enum class Errc {
     size_mismatch,       // decompressed size differs from raw_size
     crc_raw_mismatch,    // decoded file differs from the original
     unsupported,         // unknown compression mode, entry too large for a codec
-    not_found,           // installation, archive or entry not found
+    not_found,           // installation, archive, entry or folder not found
+    no_space,            // disk full or quota exceeded
+    read_only,           // the output is on a read-only filesystem / write-protected
+    too_many_open_files, // the process ran out of file handles
 };
 
 struct Error {

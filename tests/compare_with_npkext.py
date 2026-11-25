@@ -74,13 +74,21 @@ def build_installation(root: Path, seed: int, write_npk, write_resdb, Compressio
     write_npk(root / "Documents" / "script_patch.npk", {"s1": b"\x1d\x04new"})
 
 
-def tree(folder: Path) -> set[str]:
-    return {p.relative_to(folder).as_posix() for p in folder.rglob("*")
-            if p.is_file() and p.relative_to(folder).parts[0] != "_archives"}
+def tree(folder: Path, index: bool = False) -> set[str]:
+    """Files below `folder`; the _archives/ index only with `index` (and never its README)."""
+    files = set()
+    for p in folder.rglob("*"):
+        relative = p.relative_to(folder)
+        if not p.is_file() or relative.as_posix() == "_archives/README.txt":
+            continue
+        if relative.parts[0] == "_archives" and not index:
+            continue
+        files.add(relative.as_posix())
+    return files
 
 
-def compare(a: Path, b: Path) -> list[str]:
-    files_a, files_b = tree(a), tree(b)
+def compare(a: Path, b: Path, index: bool = False) -> list[str]:
+    files_a, files_b = tree(a, index), tree(b, index)
     problems = [f"only in npkext: {p}" for p in sorted(files_a - files_b)]
     problems += [f"only in npkextpp: {p}" for p in sorted(files_b - files_a)]
     problems += [f"different bytes: {p}" for p in sorted(files_a & files_b)
@@ -94,6 +102,7 @@ def main() -> int:
     parser.add_argument("--extractor", type=Path, required=True, help="C++ extractor (core_extract or npkextpp)")
     parser.add_argument("--seeds", type=int, default=5, help="number of random installations")
     parser.add_argument("--extra", nargs="*", default=[], help="extra arguments for the C++ extractor")
+    parser.add_argument("--index", action="store_true", help="also compare the _archives/ index (npkextpp writes it)")
     args = parser.parse_args()
 
     sys.path[:0] = [str(args.npkext / "src"), str(args.npkext / "tests")]
@@ -125,7 +134,7 @@ def main() -> int:
                         sys.stdout = stdout
                 cpp = subprocess.run([str(args.extractor), "--install", str(root), "--out", str(tmp / "cpp"),
                                       *extra, *args.extra], capture_output=True, text=True)
-                problems = compare(tmp / "py", tmp / "cpp")
+                problems = compare(tmp / "py", tmp / "cpp", args.index)
                 label = f"seed {seed}{' --keep-overridden' if keep else ''}"
                 count = len(tree(tmp / "py"))
                 if code != 0 or cpp.returncode != 0 or problems:
