@@ -75,29 +75,134 @@ std::string hex8(std::uint32_t value)
 
 struct Inputs {
     std::optional<npk::Installation> installation;
-    std::vector<fs::path> archives;
+    std::vector<fs::path> archives;    // to unpack
+    std::vector<fs::path> manifests;   // name manifests found (used unless --resdb is given)
 };
 
-Inputs find_archives(const CliOptions& options)
+std::string absolute_text(const fs::path& path)
+{
+    std::error_code error;
+    const fs::path out = fs::weakly_canonical(fs::absolute(path, error), error);
+    return npk::to_utf8(error ? fs::absolute(path).lexically_normal() : out);
+}
+
+// The walk of a folder: a live counter while it runs, then the counts as
+// permanent lines below `label` (Installation or Folder).
+class ScanDisplay {
+public:
+    ScanDisplay(Console& console, const fs::path& folder) : console_(console), folder_(absolute_text(folder)) {}
+
+    void operator()(std::size_t archives, std::size_t manifests)
+    {
+        const auto now = std::chrono::steady_clock::now();
+        if (now - last_ < std::chrono::milliseconds(50)) return;
+        last_ = now;
+        console_.draw(ftxui::vbox({ftxui::text("Scanning      " + folder_), ftxui::text(counts(archives, manifests).first),
+                                   ftxui::text(counts(archives, manifests).second)}));
+    }
+
+    void finish(std::string_view label, std::size_t archives, std::size_t manifests,
+                const std::vector<std::string>& unreadable)
+    {
+        console_.clear_frame();
+        console_.line(std::string(label) + folder_);
+        console_.line(counts(archives, manifests).first);
+        console_.line(counts(archives, manifests).second);
+        if (unreadable.empty()) return;
+        std::string names;
+        for (std::size_t i = 0; i < unreadable.size() && i < 8; ++i) names += (i ? ", " : "") + unreadable[i];
+        if (unreadable.size() > 8) names += " and " + format_count(unreadable.size() - 8) + " more";
+        console_.line("Warning       " + format_count(unreadable.size()) +
+                      (unreadable.size() == 1 ? " folder" : " folders") +
+                      " cannot be opened (permission denied), so the archives in " +
+                      (unreadable.size() == 1 ? "it" : "them") + " are left out: " + names);
+    }
+
+private:
+    static std::pair<std::string, std::string> counts(std::size_t archives, std::size_t manifests)
+    {
+        return {"Archives found (.npk): " + format_count(archives),
+                "Resource manifests found (resdb): " + format_count(manifests)};
+    }
+
+    Console& console_;
+    std::string folder_;
+    std::chrono::steady_clock::time_point last_{};
+};
+
+void add_manifests(std::vector<fs::path>& to, const std::vector<fs::path>& more)
+{
+    to.insert(to.end(), more.begin(), more.end());
+    std::ranges::sort(to);
+    to.erase(std::ranges::unique(to).begin(), to.end());
+}
+
+// --install DIR, or the current folder when it is an installation; --in picks
+// archives from it (or names files). With neither, the current folder is walked
+// for archives and name manifests.
+Inputs find_archives(const CliOptions& options, Console& console)
 {
     Inputs inputs;
-    if (options.install) inputs.installation = unwrap(npk::Installation::open(*options.install));
-    const npk::Installation* installation = inputs.installation ? &*inputs.installation : nullptr;
+    std::optional<fs::path> install = options.install;
+    if (!install && npk::Installation::looks_like_one(".")) install = fs::path(".");
+    if (install) {
+        ScanDisplay display(console, *install);
+        inputs.installation = unwrap(npk::Installation::open(*install, std::ref(display), {*options.out}));
+        const npk::Installation& found = *inputs.installation;
+        display.finish("Installation  ", found.archives().size(), found.resdb_files().size(), found.unreadable_folders());
+        inputs.manifests = found.resdb_files();
+    }
 
     if (!options.inputs.empty()) {
+        const npk::Installation* installation = inputs.installation ? &*inputs.installation : nullptr;
         inputs.archives = unwrap(npk::resolve_inputs(options.inputs, installation));
-        if (!inputs.installation) inputs.installation = npk::Installation::find_above(inputs.archives.front());
+        if (!inputs.installation) {
+            inputs.installation = npk::Installation::find_above(inputs.archives.front());
+            if (inputs.installation) {
+                console.line("Installation  " + npk::to_utf8(inputs.installation->root()) + " (the archives are in it)");
+                inputs.manifests = inputs.installation->resdb_files();
+            }
+        }
     } else if (inputs.installation) {
         inputs.archives = inputs.installation->archives();
         if (inputs.archives.empty()) {
             throw InputError("no .npk files found in " + npk::to_utf8(inputs.installation->root()));
         }
     } else {
-        throw InputError("nothing to unpack: give --install DIR and/or --in ...");
+        ScanDisplay display(console, ".");
+        npk::FolderScan scan = npk::scan_folder(".", std::ref(display), {*options.out});
+        display.finish("Folder        ", scan.archives.size(), scan.manifests.size(), scan.unreadable);
+        if (scan.archives.empty()) {
+            throw InputError("no .npk archives found in " + absolute_text(".") +
+                             ". Put npkextpp in the game's folder (the one with neox_bin/, res/ and Documents/), "
+                             "or give --install DIR or --in FILE (--help lists every option).");
+        }
+        inputs.archives = std::move(scan.archives);
+        inputs.manifests = std::move(scan.manifests);
+        inputs.installation = npk::Installation::find_above(inputs.archives.front());   // they may lie in one
+        if (inputs.installation) add_manifests(inputs.manifests, inputs.installation->resdb_files());
     }
 
+    const std::size_t all = inputs.archives.size();
     if (!options.unpack.empty()) inputs.archives = unwrap(npk::filter_by_name(inputs.archives, options.unpack));
+    if (inputs.archives.size() != all || !options.inputs.empty()) {
+        console.line("Selected      " + format_count(inputs.archives.size()) +
+                     (inputs.archives.size() == 1 ? " archive" : " archives"));
+    }
     return inputs;
+}
+
+// No arguments at all (a double-click): asks before unpacking. False: the user said no.
+bool confirm_unpack_all(Console& console, const fs::path& out)
+{
+    console.line("Output        " + absolute_text(out));
+    for (;;) {
+        const std::optional<std::string> answer = console.ask("Do you want to unpack all? (Y/n) ");
+        if (!answer) return false;   // no input to answer from
+        const std::string word = npk::lower_ascii(*answer);
+        if (word.empty() || word == "y" || word == "yes") return true;
+        if (word == "n" || word == "no") return false;
+    }
 }
 
 // --- Reports ---------------------------------------------------------------------------
@@ -105,24 +210,6 @@ Inputs find_archives(const CliOptions& options)
 std::string section_name(std::string_view section)
 {
     return section.empty() ? std::string("(top level)") : std::string(section) + "/";
-}
-
-void show_sources(Console& console, const std::optional<npk::Installation>& installation, std::size_t selected)
-{
-    if (!installation) return;
-    console.line("Installation  " + npk::to_utf8(installation->root()));
-    const std::size_t found = installation->archives().size();
-    const std::string chosen = selected == found ? "" : ", " + format_count(selected) + " selected";
-    console.line("Archives      " + format_count(found) + " found in the installation" + chosen);
-    const auto& blocked = installation->unreadable_folders();
-    if (!blocked.empty()) {
-        std::string names;
-        for (std::size_t i = 0; i < blocked.size() && i < 8; ++i) names += (i ? ", " : "") + blocked[i];
-        if (blocked.size() > 8) names += " and " + format_count(blocked.size() - 8) + " more";
-        console.line("Warning       " + format_count(blocked.size()) + (blocked.size() == 1 ? " folder" : " folders") +
-                     " of the installation cannot be opened (permission denied), so the archives in " +
-                     (blocked.size() == 1 ? "it" : "them") + " are left out: " + names);
-    }
 }
 
 // Says why there are no names, if there are none.
@@ -353,13 +440,14 @@ void show_live(Console& console, Dashboard& dashboard, std::stop_token stop, con
 int run(const CliOptions& options, Console& console)
 {
     console.print(logo(NPKEXTPP_VERSION));
-    if (!options.out && !options.dry_run) throw InputError("--out DIR is required (or use --dry-run to only look)");
 
-    Inputs inputs = find_archives(options);
-    show_sources(console, inputs.installation, inputs.archives.size());
+    Inputs inputs = find_archives(options, console);
+    if (options.guided && !confirm_unpack_all(console, *options.out)) {
+        console.line("Nothing was unpacked.");
+        return kExitOk;
+    }
 
-    std::vector<fs::path> resdb_files = options.resdb;
-    if (resdb_files.empty() && inputs.installation) resdb_files = inputs.installation->resdb_files();
+    std::vector<fs::path> resdb_files = options.resdb.empty() ? inputs.manifests : options.resdb;
     for (const fs::path& resdb : resdb_files) {
         std::error_code error;
         if (!fs::is_regular_file(resdb, error)) throw InputError("resdb file not found: " + npk::to_utf8(resdb));
@@ -369,11 +457,12 @@ int run(const CliOptions& options, Console& console)
 
     // What an earlier run already wrote stays (unless --overwrite).
     npk::ExistingFiles existing;
-    if (options.out && !options.overwrite) {
-        console.line("Output        " + npk::to_utf8(*options.out) + " (looking for files from earlier runs...)");
+    const std::string output_label = options.guided ? "              " : "Output        " + absolute_text(*options.out) + " ";
+    if (!options.overwrite) {
+        console.line(output_label + "(looking for files from earlier runs...)");
         existing = npk::ExistingFiles::scan(*options.out);
-    } else if (options.out) {
-        console.line("Output        " + npk::to_utf8(*options.out) + " (--overwrite: every file is written again)");
+    } else {
+        console.line(output_label + "(--overwrite: every file is written again)");
     }
 
     npk::PlanOptions plan_options;
@@ -385,7 +474,6 @@ int run(const CliOptions& options, Console& console)
     show_plan(console, plan, manifest.size(), resdb_files.size(), options.verbose);
 
     if (options.entry) {
-        if (!options.out) throw InputError("--entry needs --out DIR");
         return extract_entry(console, plan, *options.entry, *options.out, options.verify);
     }
     if (options.dry_run || plan.groups.empty()) return kExitOk;
@@ -562,7 +650,8 @@ int main(int argc, char** argv)
     int exit_code = kExitOk;
     const std::optional<CliOptions> parsed = parse_cli(argc, argv, exit_code);
     if (!parsed) return exit_code;
-    const CliOptions& options = *parsed;
+    CliOptions options = *parsed;
+    if (!options.out) options.out = fs::path("unpacked");
 
     if (options.show_licenses) {
         std::cout << third_party_licenses();
@@ -570,14 +659,17 @@ int main(int argc, char** argv)
     }
 
     Console console;
+    int code = kExitOk;
     try {
-        if (options.update) return run_update(*options.update, console);
-        return run(options, console);
+        code = options.update ? run_update(*options.update, console) : run(options, console);
     } catch (const InputError& error) {
         console.error(error.what());
-        return kExitBadInput;
+        code = kExitBadInput;
     } catch (const std::exception& error) {
         console.error(std::string("unexpected: ") + error.what());
-        return kExitEntriesFailed;
+        code = kExitEntriesFailed;
     }
+    // Started by a double-click: the window would close before anyone read it.
+    if (Console::owns_window()) (void)console.ask("Press Enter to close. ");
+    return code;
 }

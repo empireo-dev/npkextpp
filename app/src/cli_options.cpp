@@ -54,7 +54,8 @@ std::optional<CliOptions> parse_cli(int argc, char** argv, int& exit_code)
     app.get_formatter()->column_width(28);
 
     auto* source = "where to read";
-    app.add_option("--install", options.install, "game installation folder (contains neox_bin/, res/, Documents/)")
+    app.add_option("--install", options.install, "game installation folder (contains neox_bin/, res/, Documents/). Default: the current "
+                   "folder if it is one; if not, it is searched for archives and name manifests")
         ->group(source);
     app.add_option("--in", options.inputs,
                    "archives: file paths, names searched in the installation (ui, 'res_dlc_*'), "
@@ -77,7 +78,7 @@ std::optional<CliOptions> parse_cli(int argc, char** argv, int& exit_code)
         ->group(selection);
 
     auto* output = "where to write";
-    app.add_option("--out", options.out, "output folder; archives are unpacked into folders below it")->group(output);
+    app.add_option("--out", options.out, "output folder; archives are unpacked into folders below it. Default: ./unpacked")->group(output);
     app.add_flag("--overwrite", options.overwrite,
                  "write every file again, also those already in the output folder (default: keep them)")
         ->group(output);
@@ -121,6 +122,7 @@ std::optional<CliOptions> parse_cli(int argc, char** argv, int& exit_code)
     }
     options.verify = !no_verify;
     if (update_command->parsed()) options.update = update;
+    options.guided = argc <= 1;
     exit_code = kExitOk;
     return options;
 }

@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <cstdio>
 #include <cstdlib>
+#include <iostream>
 #include <string>
 #include <thread>
 
@@ -352,6 +353,34 @@ void Console::line(std::string_view text)
         reset_ = reset;
     }
     std::fflush(stdout);
+}
+
+std::optional<std::string> Console::ask(std::string_view question)
+{
+    {
+        std::lock_guard lock(mutex_);
+        clear_frame_locked();
+        std::fprintf(stdout, "%.*s", static_cast<int>(question.size()), question.data());
+        std::fflush(stdout);
+    }
+    std::string answer;
+    if (!std::getline(std::cin, answer)) {
+        std::fputs("\n", stdout);
+        return std::nullopt;
+    }
+    while (!answer.empty() && (answer.back() == '\r' || answer.back() == ' ')) answer.pop_back();
+    while (!answer.empty() && answer.front() == ' ') answer.erase(answer.begin());
+    return answer;
+}
+
+bool Console::owns_window()
+{
+#if defined(_WIN32)
+    DWORD processes[2];
+    return ::GetConsoleProcessList(processes, 2) == 1;   // nobody else (no cmd.exe, no PowerShell) is attached
+#else
+    return false;   // a terminal stays open after we exit
+#endif
 }
 
 void Console::print(const ftxui::Element& element)

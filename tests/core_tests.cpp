@@ -465,6 +465,32 @@ TEST(every_archive_of_the_installation_is_found)
     const fs::path root = fake_install(dir.path());
     const auto installation = npk::Installation::open(root);
     CHECK(installation && installation->archives().size() == 6u && installation->unreadable_folders().empty());
+    CHECK(installation->resdb_files() == std::vector<fs::path>{installation->root() / "res" / "resdb"});
+}
+
+TEST(a_walk_counts_manifests_and_leaves_out_unpacked_folders)
+{
+    TempDir dir;
+    const fs::path root = fake_install(dir.path());
+    write_resdb(root / "Documents" / "res" / "resdb", {"ui\\new.png"});
+    write_file(root / "Documents" / "resdb", Bytes{std::byte{'n'}, std::byte{'o'}});   // named resdb, not a manifest
+    // Earlier unpacks inside the installation: a finished one (_archives/) and the folder given as the output.
+    write_file(root / "unpacked" / "_archives" / "index.csv", Bytes{});
+    write_file(root / "unpacked" / "res" / "copied.npk", Bytes{});
+    write_file(root / "here" / "res" / "copied.npk", Bytes{});
+
+    std::size_t calls = 0, last_archives = 0;
+    const npk::FolderScan scan = npk::scan_folder(root, [&](std::size_t archives, std::size_t) {
+        ++calls;
+        last_archives = archives;
+    }, {root / "here"});
+    CHECK_EQ(scan.archives.size(), 6u);
+    CHECK_EQ(scan.manifests.size(), 2u);
+    CHECK(calls > 0 && last_archives == 6u);
+
+    const auto installation = npk::Installation::open(root, {}, {root / "here"});
+    CHECK(installation && installation->archives().size() == 6u && installation->resdb_files().size() == 2u);
+    CHECK(npk::Installation::looks_like_one(root) && !npk::Installation::looks_like_one(root / "res"));
 }
 
 TEST(folders_that_cannot_be_opened_are_reported)

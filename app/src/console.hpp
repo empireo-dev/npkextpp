@@ -6,6 +6,7 @@
 #include <cstdint>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -45,6 +46,14 @@ public:
     void stop_input();   // as it was before; also done on destruction
     // Waits up to `timeout` for input and returns what came (sleeps when not reading).
     [[nodiscard]] std::vector<Key> read_keys(std::chrono::milliseconds timeout);
+
+    // Prints `question` (no line break) and reads the answer line; nullopt when
+    // input has ended (closed, or not there at all).
+    [[nodiscard]] std::optional<std::string> ask(std::string_view question);
+
+    // The console window was opened for this program alone (Windows: started by
+    // a double-click or a drop on the exe), so it closes the moment we exit.
+    [[nodiscard]] static bool owns_window();
 
     [[nodiscard]] bool interactive() const noexcept { return interactive_; }
     [[nodiscard]] int width() const;    // of the terminal (100 when not a terminal)

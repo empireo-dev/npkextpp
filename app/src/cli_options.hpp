@@ -29,7 +29,7 @@ struct CliOptions {
     std::vector<std::filesystem::path> resdb;       // --resdb: manifests to use instead of the installation's
     std::vector<std::string> unpack;                // --unpack: only archives with these names
     std::optional<std::size_t> limit;               // --limit: first N entries of each archive
-    std::optional<std::filesystem::path> out;       // output folder
+    std::optional<std::filesystem::path> out;       // output folder (main() makes it ./unpacked when not given)
     std::optional<std::string> entry;               // --entry: extract one file by its path in the tree
     bool overwrite = false;                         // --overwrite: rewrite files already in the output folder
     bool keep_overridden = false;
@@ -37,6 +37,7 @@ struct CliOptions {
     bool verify = true;
     bool verbose = false;
     bool show_licenses = false;
+    bool guided = false;                            // no arguments at all (a double-click): ask before unpacking
 };
 
 // Parses argv. Returns nullopt after printing help / an error; `exit_code` is

@@ -4,6 +4,8 @@
 #include "npk/paths.hpp"
 
 #include <algorithm>
+#include <fstream>
+#include <string_view>
 
 namespace fs = std::filesystem;
 
@@ -30,14 +32,63 @@ bool is_file(const fs::path& path)
     return fs::is_regular_file(path, error);
 }
 
-void add_unique(std::vector<std::string>& list, std::string item)
+// A file named resdb that starts like a name manifest.
+bool is_manifest(const fs::path& path)
 {
-    if (std::ranges::find(list, item) == list.end()) list.push_back(std::move(item));
+    if (!iequals_ascii(to_utf8(path.filename()), "resdb")) return false;
+    std::ifstream file(path, std::ios::binary);
+    char magic[4] = {};
+    return file.read(magic, sizeof magic) && std::string_view(magic, sizeof magic) == "CCZ!";
 }
 
 } // namespace
 
-Result<Installation> Installation::open(const fs::path& folder)
+FolderScan scan_folder(const fs::path& root_folder, const ScanProgress& progress, const std::vector<fs::path>& skip)
+{
+    const fs::path root = resolved(root_folder);
+    std::vector<fs::path> skipped;
+    for (const fs::path& folder : skip) skipped.push_back(resolved(folder));
+    FolderScan found;
+    std::vector<fs::path> folders{root};
+    std::vector<fs::path> archives, manifests, below;   // of one folder
+    while (!folders.empty()) {
+        const fs::path folder = std::move(folders.back());
+        folders.pop_back();
+        std::error_code error;
+        fs::directory_iterator it(folder, error);
+        if (error) {
+            std::string rel = to_utf8(folder.lexically_relative(root));
+            std::ranges::replace(rel, '\\', '/');
+            found.unreadable.push_back(rel.empty() || rel == "." ? std::string(".") : rel);
+            continue;
+        }
+        archives.clear(), manifests.clear(), below.clear();
+        bool output = false;   // unpacked here before: nothing of the game below
+        for (; !error && it != fs::directory_iterator(); it.increment(error)) {
+            std::error_code type_error;
+            if (it->is_symlink(type_error)) continue;
+            if (it->is_directory(type_error)) {
+                if (it->path().filename() == "_archives") output = true;
+                if (std::ranges::find(skipped, it->path()) == skipped.end()) below.push_back(it->path());
+            } else if (it->is_regular_file(type_error)) {
+                if (iequals_ascii(to_utf8(it->path().extension()), ".npk")) archives.push_back(it->path());
+                else if (is_manifest(it->path())) manifests.push_back(it->path());
+            }
+        }
+        if (output && folder != root) continue;
+        found.archives.insert(found.archives.end(), archives.begin(), archives.end());
+        found.manifests.insert(found.manifests.end(), manifests.begin(), manifests.end());
+        folders.insert(folders.end(), below.begin(), below.end());
+        if (progress) progress(found.archives.size(), found.manifests.size());
+    }
+    std::ranges::sort(found.archives);
+    std::ranges::sort(found.manifests);
+    std::ranges::sort(found.unreadable);
+    return found;
+}
+
+Result<Installation> Installation::open(const fs::path& folder, const ScanProgress& progress,
+                                        const std::vector<fs::path>& skip)
 {
     const fs::path root = resolved(folder);
     if (!is_dir(root)) return make_error(Errc::invalid_input, "installation folder not found: " + to_utf8(folder));
@@ -46,7 +97,7 @@ Result<Installation> Installation::open(const fs::path& folder)
         return make_error(Errc::invalid_input, to_utf8(root) + " does not look like a game installation "
                                                                "(expected neox_bin/ or res/resdb + Documents/)");
     }
-    installation.scan_archives();
+    installation.scan(progress, skip);
     return installation;
 }
 
@@ -57,11 +108,16 @@ std::optional<Installation> Installation::find_above(const fs::path& path)
         folder = folder.parent_path();
         Installation candidate(folder);
         if (candidate.looks_valid()) {
-            candidate.scan_archives();
+            candidate.scan({}, {});
             return candidate;
         }
     }
     return std::nullopt;
+}
+
+bool Installation::looks_like_one(const fs::path& folder)
+{
+    return Installation(resolved(folder)).looks_valid();
 }
 
 bool Installation::looks_valid() const
@@ -71,43 +127,12 @@ bool Installation::looks_valid() const
     return has_engine || has_resources;
 }
 
-void Installation::scan_archives()
+void Installation::scan(const ScanProgress& progress, const std::vector<fs::path>& skip)
 {
-    std::vector<fs::path> found;
-    std::vector<fs::path> folders{root_};
-    while (!folders.empty()) {
-        const fs::path folder = std::move(folders.back());
-        folders.pop_back();
-        std::error_code error;
-        fs::directory_iterator it(folder, error);
-        if (error) {
-            std::string rel = to_utf8(folder.lexically_relative(root_));
-            std::ranges::replace(rel, '\\', '/');
-            add_unique(unreadable_, rel.empty() ? std::string(".") : rel);
-            continue;
-        }
-        for (; !error && it != fs::directory_iterator(); it.increment(error)) {
-            std::error_code type_error;
-            if (it->is_symlink(type_error)) continue;
-            if (it->is_directory(type_error)) folders.push_back(it->path());
-            else if (it->is_regular_file(type_error) && iequals_ascii(to_utf8(it->path().extension()), ".npk")) {
-                found.push_back(it->path());
-            }
-        }
-    }
-    std::ranges::sort(found);
-    std::ranges::sort(unreadable_);
-    archives_ = std::move(found);
-}
-
-std::vector<fs::path> Installation::resdb_files() const
-{
-    std::vector<fs::path> files;
-    for (const char* location : kResdbLocations) {
-        fs::path candidate = root_ / from_utf8(location);
-        if (is_file(candidate)) files.push_back(std::move(candidate));
-    }
-    return files;
+    FolderScan found = scan_folder(root_, progress, skip);
+    archives_ = std::move(found.archives);
+    manifests_ = std::move(found.manifests);
+    unreadable_ = std::move(found.unreadable);
 }
 
 std::vector<std::string> Installation::unreadable_resdb() const

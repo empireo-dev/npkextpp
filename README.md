@@ -22,10 +22,15 @@ npkextpp --install "path/to/Magic Awakened" --entry ui/login/bg.png --out .
 `npkextpp --help` lists every option. The options and exit codes are the same as
 npkext's (0 ok, 1 some entries failed, 2 bad input, 130 interrupted), plus:
 
-- `--install` walks the whole installation for `.npk` files, so any game version
-  or client (global, TW, CN) works and archives added by an update are found.
-  Folders of the installation that cannot be opened (permission denied) are named
-  in a warning, as is a missing name manifest.
+- `--install` walks the whole installation for `.npk` files and name manifests,
+  so any game version or client (global, TW, CN) works and archives added by an
+  update are found. Folders of the installation that cannot be opened
+  (permission denied) are named in a warning, as is a missing name manifest.
+- Without options: `--install` is the current folder if it is an installation,
+  and `--out` is `./unpacked`. With no arguments at all (a double-click on the
+  exe in the game's folder), the app searches the current folder, shows what it
+  found and asks "Do you want to unpack all? (Y/n)". See
+  [docs/interactions.md](docs/interactions.md).
 - `--resdb FILE...` gives the name manifests by hand, for archives copied out of
   the installation. Give both, `Documents/res/resdb` (from the patches) and
   `res/resdb` (from the installer): each has names the other lacks, and they
