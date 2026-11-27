@@ -319,6 +319,7 @@ Plan Planner::build(std::span<const fs::path> archives, const PlanOptions& optio
     for (std::size_t order = 0; order < archives.size(); ++order) {
         const fs::path& path = archives[order];
         auto archive = Archive::open(path);
+        if (options.progress) options.progress(order + 1, archives.size());
         if (!archive) {
             plan.unreadable.emplace_back(path, archive.error().message);
             continue;

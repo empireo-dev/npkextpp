@@ -41,7 +41,7 @@ works when it is put into the game's folder.
    Enter, `y` or `yes` unpacks everything that was found; `n` or `no` ends with
    "Nothing was unpacked." Anything else asks again. When there is no input
    to answer from (closed, or redirected from an empty file), the answer is no.
-3. **Unpacking**, as with `--install`: names, plan, disk test, live progress, summary.
+3. **Unpacking**, as with `--install` (see below): names, plan, disk test, live progress, summary.
 4. **The window stays open** at the end, also after an error, with
    "Press Enter to close." That happens on Windows only when the console window
    belongs to npkextpp alone (a double-click), never when it was started
@@ -51,6 +51,30 @@ Nothing found: the run ends with an error that says where to put the exe.
 
 With any argument given there is no question: the options say what to do. The
 defaults above still apply.
+
+## The steps before unpacking
+
+The search only lists the files of the installation: it opens no archive and
+reads only the first 4 bytes of each `resdb` file. Everything that reads the
+archives comes after it (after the question, on a double-click). Each step shows
+a live line while it runs:
+
+| step | live line |
+|---|---|
+| search | `Scanning` and the counters (above) |
+| names | `Reading names from 2 manifests...` |
+| tables of contents | `Reading the archives' tables of contents ▕█████▏ 312 of 689` |
+| deciding where every file goes | `Sorting out names and overrides...` |
+
+`--verbose` ends this part with the time each step took:
+
+```
+Timing        scan 0.4 s, names 1.0 s, earlier output 0.0 s, tables of contents 0.5 s, deciding 1.7 s
+```
+
+That is the whole installation on a VM whose files were already in memory. On
+a hard disk that has not read the archives yet, the tables of contents take
+longer: one seek per archive.
 
 ## What the search leaves out
 

@@ -475,18 +475,31 @@ int run(const CliOptions& options, Console& console)
 {
     console.print(logo(NPKEXTPP_VERSION));
 
+    using Clock = std::chrono::steady_clock;
+    const auto seconds = [](Clock::time_point from, Clock::time_point to) {
+        return format_duration(std::chrono::duration<double>(to - from).count());
+    };
+    const Clock::time_point started = Clock::now();
     Inputs inputs = find_archives(options, console);
+    const Clock::time_point scanned = Clock::now();
     if (options.guided && !confirm_unpack_all(console, *options.out)) {
         console.line("Nothing was unpacked.");
         return kExitOk;
     }
+    const Clock::time_point confirmed = Clock::now();
 
     std::vector<fs::path> resdb_files = options.resdb.empty() ? inputs.manifests : options.resdb;
     for (const fs::path& resdb : resdb_files) {
         std::error_code error;
         if (!fs::is_regular_file(resdb, error)) throw InputError("resdb file not found: " + npk::to_utf8(resdb));
     }
+    if (!resdb_files.empty()) {
+        console.draw(ftxui::text("Reading names from " + format_count(resdb_files.size()) +
+                                 (resdb_files.size() == 1 ? " manifest..." : " manifests...")));
+    }
     const npk::ResourceManifest manifest = unwrap(npk::ResourceManifest::from_files(resdb_files));
+    console.clear_frame();
+    const Clock::time_point named = Clock::now();
     show_missing_names(console, options, inputs.installation, resdb_files.size());
 
     // What an earlier run already wrote stays (unless --overwrite).
@@ -503,8 +516,34 @@ int run(const CliOptions& options, Console& console)
     plan_options.keep_overridden = options.keep_overridden;
     plan_options.limit = options.limit;
     plan_options.existing = &existing;
+    Clock::time_point tables_read{};
+    plan_options.progress = [&console, &tables_read, last = Clock::time_point{}](std::size_t done,
+                                                                              std::size_t total) mutable {
+        const auto now = Clock::now();
+        if (done < total && now - last < std::chrono::milliseconds(50)) return;
+        last = now;
+        if (done == total) {
+            tables_read = now;
+            console.draw(ftxui::text("Sorting out names and overrides..."));
+            return;
+        }
+        using namespace ftxui;
+        const float share = static_cast<float>(done) / static_cast<float>(total);
+        console.draw(hbox({text("Reading the archives' tables of contents  "),
+                           gauge(share) | size(WIDTH, EQUAL, 30) | color(Color::Cyan),
+                           text("  " + format_count(done) + " of " + format_count(total))}));
+    };
     npk::Planner planner(manifest, inputs.installation ? &*inputs.installation : nullptr);
+    const Clock::time_point existing_found = Clock::now();
     npk::Plan plan = planner.build(inputs.archives, plan_options);
+    console.clear_frame();
+    const Clock::time_point planned = Clock::now();
+    if (options.verbose) {
+        if (tables_read == Clock::time_point{}) tables_read = existing_found;
+        console.line("Timing        scan " + seconds(started, scanned) + ", names " + seconds(confirmed, named) +
+                     ", earlier output " + seconds(named, existing_found) + ", tables of contents " +
+                     seconds(existing_found, tables_read) + ", deciding " + seconds(tables_read, planned));
+    }
     show_plan(console, plan, manifest.size(), resdb_files.size(), options.verbose);
 
     if (options.entry) {

@@ -7,6 +7,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <filesystem>
+#include <functional>
 #include <optional>
 #include <span>
 #include <string>
@@ -153,6 +154,9 @@ struct PlanOptions {
     bool keep_overridden = false;          // also write lower-priority copies
     std::optional<std::size_t> limit;      // only the first N entries (by offset) of each archive
     const ExistingFiles* existing = nullptr;   // leave out the entries already there (no --overwrite)
+    // Called after each archive's table of contents is read (done of total); the
+    // plan is decided after the last one.
+    std::function<void(std::size_t done, std::size_t total)> progress;
 };
 
 // Turns a list of archives into a Plan: reads every table of contents, places
