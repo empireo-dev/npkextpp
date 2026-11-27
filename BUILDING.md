@@ -6,7 +6,7 @@ the project's GitHub Releases page; you only need this if you want to build it
 yourself.
 
 Everything the build needs is in this repository (the libraries are in
-`third_party/`), so no internet connection is needed once you have the sources.
+`lib/`), so no internet connection is needed once you have the sources.
 
 ## 1. What you need
 

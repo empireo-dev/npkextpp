@@ -5,11 +5,11 @@ include("${PROJECT_SOURCE_DIR}/cmake/NpkWarnings.cmake")
 # Third-party license texts, embedded so `npkextpp --licenses` can show them
 # (BSD/MIT require the notices to travel with the binary).
 set(_npk_license_files
-    "LZ4|${PROJECT_SOURCE_DIR}/third_party/lz4/LICENSE"
-    "Zstandard|${PROJECT_SOURCE_DIR}/third_party/zstd/LICENSE"
-    "libdeflate|${PROJECT_SOURCE_DIR}/third_party/libdeflate/LICENSE"
-    "CLI11|${PROJECT_SOURCE_DIR}/third_party/cli11/LICENSE"
-    "FTXUI|${PROJECT_SOURCE_DIR}/third_party/ftxui/LICENSE"
+    "LZ4|${PROJECT_SOURCE_DIR}/lib/lz4/LICENSE"
+    "Zstandard|${PROJECT_SOURCE_DIR}/lib/zstd/LICENSE"
+    "libdeflate|${PROJECT_SOURCE_DIR}/lib/libdeflate/LICENSE"
+    "CLI11|${PROJECT_SOURCE_DIR}/lib/cli11/LICENSE"
+    "FTXUI|${PROJECT_SOURCE_DIR}/lib/ftxui/LICENSE"
 )
 set(NPK_LICENSE_TEXT "")
 foreach(_item IN LISTS _npk_license_files)

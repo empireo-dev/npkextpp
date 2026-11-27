@@ -72,7 +72,7 @@ then read back and compared. The archive is changed in place and an interrupted
 write damages it, so keep a copy of an archive you cannot download again.
 
 What the screen shows, in a terminal (redrawn every 50 ms, drawn with
-[FTXUI](third_party/README.md)):
+[FTXUI](lib/README.md)):
 
 1. the name in a box, then the installation, the archives found, the names and the plan;
 2. the disk test: how long random 4 KiB reads took (half of them, and 9 in 10) and the write speed, and the
@@ -103,7 +103,7 @@ Redirected to a file, it prints the same without colours, a progress line every
 | `src/pipeline/` | `npk::pipeline` (static lib) | Multi-threaded extraction of a whole plan: Reader → Decoders (all cores) → Writers (count tuned at run time). Design: [docs/pipeline.md](docs/pipeline.md). |
 | `src/npkextpp/` | `npkextpp` (exe) | The main project: the command line front end. One self-contained executable. |
 | `tests/` | `core_tests`, `pipeline_tests`, `core_extract` | Built with `-DNPKEXTPP_BUILD_TESTS=ON`. |
-| `third_party/` | | Vendored dependency archives, see [third_party/README.md](third_party/README.md). |
+| `lib/` | | Vendored dependency archives, see [lib/README.md](lib/README.md). |
 
 ### The core in one example
 

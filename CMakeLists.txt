@@ -74,7 +74,7 @@ endif()
 
 find_package(Threads REQUIRED)
 
-add_subdirectory(third_party)
+add_subdirectory(lib)
 add_subdirectory(src/core)
 if(NPKEXTPP_BUILD_PIPELINE)
     add_subdirectory(src/pipeline)
