@@ -1,0 +1,93 @@
+name: Release
+
+# Pushing a version tag (e.g. v0.1.0) builds the standalone binary on Linux and
+# Windows and publishes a GitHub release with both attached. No installers.
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+jobs:
+  build:
+    name: Build ${{ matrix.asset }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            asset: npkextpp-linux-x64
+          - os: windows-latest
+            asset: npkextpp-windows-x64.exe
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Ninja (Linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y ninja-build
+
+      # Statically linked, so the one file runs on any modern distro.
+      - name: Build (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DNPKEXTPP_FULLY_STATIC=ON
+          cmake --build build
+          cmake -E copy build/app/npkextpp "${{ matrix.asset }}"
+
+      - name: Set up MSVC (Windows)
+        if: runner.os == 'Windows'
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+
+      # MSVC with the static runtime, so the one .exe needs no DLLs.
+      - name: Build (Windows)
+        if: runner.os == 'Windows'
+        shell: bash
+        run: |
+          cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
+          cmake --build build
+          cmake -E copy build/app/npkextpp.exe "${{ matrix.asset }}"
+
+      - name: Upload binary
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.asset }}
+          path: ${{ matrix.asset }}
+          if-no-files-found: error
+
+  release:
+    name: Publish GitHub release
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download binaries
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Write release notes
+        run: |
+          cat > notes.md <<'EOF'
+          Standalone command-line binaries — no installer, nothing to ship alongside them.
+
+          - `npkextpp-linux-x64` — Linux x86-64, statically linked (runs on any modern distro)
+          - `npkextpp-windows-x64.exe` — Windows x86-64 (MSVC, static runtime)
+
+          Run `npkextpp --help` for every option.
+          EOF
+
+      - name: Create release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "${{ github.ref_name }}" \
+            --repo "${{ github.repository }}" \
+            --title "npkextpp ${{ github.ref_name }}" \
+            --notes-file notes.md \
+            dist/npkextpp-linux-x64 \
+            dist/npkextpp-windows-x64.exe
