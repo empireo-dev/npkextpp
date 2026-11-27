@@ -124,7 +124,7 @@ auto bytes = decoder.read(*archive, *archive->find("login\\bg.png")); // check, 
 first-time builder), the presets, every option, tests and other setups. In short:
 
 ```bash
-cmake --preset build          # Windows: build-win, in an x64 Native Tools Command Prompt
+cmake --preset build          # Windows: build-win, in a prepared window (BUILDING.md)
 cmake --build --preset build
 ```
 

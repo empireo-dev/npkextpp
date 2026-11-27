@@ -12,24 +12,71 @@ Everything the build needs is in this repository (the libraries are in
 
 | tool | what it is for | minimum version |
 |---|---|---|
-| a C++ compiler | turns the source code into a program | GCC 13, Clang 17 or Visual Studio 2022 17.6 |
+| a C++ compiler | turns the source code into a program | GCC 13, Clang 17, or the MSVC toolchain 19.37 (comes with Visual Studio 2022 17.7) |
 | CMake | prepares the build | 3.25 |
 | Ninja | runs the build | any |
 | Git | downloads the sources (optional: a ZIP from GitHub works too) | any |
 
 ### Windows
 
-1. Install **Visual Studio 2022** ("Community" is free), or the smaller
-   **Build Tools for Visual Studio 2022** if you don't want the editor. Both are on
-   visualstudio.microsoft.com.
+You need the **MSVC toolchain** (Microsoft's C++ compiler), version **19.37 or
+newer**. It is part of Visual Studio, so the simple way to get it is to install
+Visual Studio **2022 (version 17.7) or newer**, such as Visual Studio 2026. The
+compiler has to support C++23's `std::print`, which MSVC has since 19.37.
+
+1. Install one of these, both free, from visualstudio.microsoft.com:
+   - **Visual Studio Community**, the full editor, or
+   - **Build Tools for Visual Studio**, the toolchain without the editor.
 2. In the installer, tick the **Desktop development with C++** workload. It
    brings the compiler, CMake and Ninja; keep "C++ CMake tools for Windows"
    ticked in its list on the right.
 3. Optional: install **Git for Windows** (git-scm.com).
 
-Visual Studio's CMake and Ninja work only inside a prepared window: open the
-Start menu and run **x64 Native Tools Command Prompt for VS 2022**. All Windows
-commands below are typed there.
+To check an existing install, run `cl` in a prepared window (below): its first
+line says `Version 19.xx`.
+
+#### The prepared window
+
+The compiler, CMake and Ninja work only in a window that knows where they are.
+There are two ways to get one.
+
+**From the Start menu.** Open the Start menu, type `x64 Native Tools`, and run
+**x64 Native Tools Command Prompt for VS 2022** (or for your version). It
+opens a ready cmd window.
+
+**In a window you already have.** Run Visual Studio's setup script in it.
+
+- In **cmd**:
+
+  ```bat
+  "C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Auxiliary\Build\vcvars64.bat"
+  ```
+
+- In **PowerShell**:
+
+  ```powershell
+  & "C:\Program Files\Microsoft Visual Studio\2022\Community\Common7\Tools\Launch-VsDevShell.ps1" -Arch amd64 -HostArch amd64
+  ```
+
+  Don't leave out `-Arch amd64`: without it PowerShell gets the 32-bit compiler.
+
+The folder depends on your version and edition: `2022\Community`,
+`2022\BuildTools`, `18\Community` for Visual Studio 2026, and so on (Build
+Tools may be under `C:\Program Files (x86)` instead). This prints it:
+
+```bat
+"C:\Program Files (x86)\Microsoft Visual Studio\Installer\vswhere.exe" -latest -products * -property installationPath
+```
+
+(In PowerShell, put `&` and a space before it.)
+
+**cmd is the simpler choice.**
+`vcvars64.bat` is a cmd script, so it just works there. PowerShell needs the
+separate script above, with the right options, and may refuse to run scripts at
+all ("running scripts is disabled on this system"). Once the window is
+prepared, the build commands are the same in both.
+
+The setup lasts only as long as that window; a new window needs it again.
 
 ### Linux
 
@@ -74,7 +121,7 @@ unpack it, and open a command window in that folder.
 
 Two commands: the first prepares the build, the second compiles it.
 
-Windows (in the x64 Native Tools Command Prompt):
+Windows (in a prepared window, section 1):
 
 ```bat
 cmake --preset build-win
@@ -177,8 +224,8 @@ Some useful variants:
 - **Sanitizers** (finding memory and threading bugs, GCC or Clang):
   `cmake -S . -B out/build-asan -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo -DNPKEXTPP_BUILD_TESTS=ON -DCMAKE_CXX_FLAGS=-fsanitize=address,undefined -DCMAKE_EXE_LINKER_FLAGS=-fsanitize=address,undefined`
   (`-fsanitize=thread` for threading bugs, in its own folder).
-- **Visual Studio solution:** `cmake -S . -B out/build-vs -G "Visual Studio 17 2022"`,
-  then open the `.sln` in `out/build-vs`.
+- **Visual Studio solution:** `cmake -S . -B out/build-vs -G "Visual Studio 17 2022"`
+  (`"Visual Studio 18 2026"` for Visual Studio 2026), then open the solution in `out/build-vs`.
 - **MinGW** (GCC on Windows, not tested): from a MinGW shell,
   `cmake -S . -B out/build-mingw -G Ninja`. The program is linked with `-static`.
 
@@ -197,7 +244,7 @@ target_link_libraries(my_tool PRIVATE npk::pipeline)   # plus the multi-threaded
 ## When something goes wrong
 
 - **`'cmake' is not recognized`, or `No CMAKE_CXX_COMPILER could be found`, on
-  Windows:** the window is not the x64 Native Tools Command Prompt.
+  Windows:** the window is not prepared (section 1, "The prepared window").
 - **`CMake 3.25 or higher is required`:** your CMake is too old; install a newer one
   (cmake.org, or `pip install cmake`).
 - **`Could not find Ninja`:** install Ninja (section 1).
