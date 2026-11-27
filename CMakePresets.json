@@ -1,0 +1,61 @@
+{
+  "version": 6,
+  "cmakeMinimumRequired": { "major": 3, "minor": 25, "patch": 0 },
+  "configurePresets": [
+    {
+      "name": "base",
+      "hidden": true,
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/out/${presetName}"
+    },
+    {
+      "name": "unix",
+      "hidden": true,
+      "inherits": "base",
+      "condition": { "type": "notEquals", "lhs": "${hostSystemName}", "rhs": "Windows" }
+    },
+    {
+      "name": "windows",
+      "hidden": true,
+      "inherits": "base",
+      "condition": { "type": "equals", "lhs": "${hostSystemName}", "rhs": "Windows" },
+      "cacheVariables": { "CMAKE_C_COMPILER": "cl", "CMAKE_CXX_COMPILER": "cl" }
+    },
+    {
+      "name": "build",
+      "displayName": "Release (Linux, macOS)",
+      "inherits": "unix",
+      "cacheVariables": { "CMAKE_BUILD_TYPE": "Release", "NPKEXTPP_BIN_DIR": "${sourceDir}/out/bin" }
+    },
+    {
+      "name": "build-debug",
+      "displayName": "Debug (Linux, macOS)",
+      "inherits": "unix",
+      "cacheVariables": { "CMAKE_BUILD_TYPE": "Debug", "NPKEXTPP_BIN_DIR": "${sourceDir}/out/bin-debug" }
+    },
+    {
+      "name": "build-win",
+      "displayName": "Release (Windows, MSVC)",
+      "inherits": "windows",
+      "cacheVariables": { "CMAKE_BUILD_TYPE": "Release", "NPKEXTPP_BIN_DIR": "${sourceDir}/out/bin-win" }
+    },
+    {
+      "name": "build-win-debug",
+      "displayName": "Debug (Windows, MSVC)",
+      "inherits": "windows",
+      "cacheVariables": { "CMAKE_BUILD_TYPE": "Debug", "NPKEXTPP_BIN_DIR": "${sourceDir}/out/bin-win-debug" }
+    }
+  ],
+  "buildPresets": [
+    { "name": "build", "configurePreset": "build" },
+    { "name": "build-debug", "configurePreset": "build-debug" },
+    { "name": "build-win", "configurePreset": "build-win" },
+    { "name": "build-win-debug", "configurePreset": "build-win-debug" }
+  ],
+  "testPresets": [
+    { "name": "build", "configurePreset": "build", "output": { "outputOnFailure": true } },
+    { "name": "build-debug", "configurePreset": "build-debug", "output": { "outputOnFailure": true } },
+    { "name": "build-win", "configurePreset": "build-win", "output": { "outputOnFailure": true } },
+    { "name": "build-win-debug", "configurePreset": "build-win-debug", "output": { "outputOnFailure": true } }
+  ]
+}

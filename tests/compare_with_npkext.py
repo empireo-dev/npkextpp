@@ -6,7 +6,7 @@ Builds a randomized miniature installation with npkext's own test helpers
 compression mode), unpacks it with npkext and with a C++ extractor, and checks
 that both produce the same files with the same bytes. _archives/ is not compared.
 
-    python3 tests/compare_with_npkext.py --npkext ../npkext --extractor build/tests/core_extract
+    python3 tests/compare_with_npkext.py --npkext ../npkext --extractor out/bin/tests/core_extract
 
 No game data is involved.
 """

@@ -24,3 +24,13 @@ if(NPKEXTPP_BUILD_PIPELINE)
     target_link_libraries(tune_sim PRIVATE npk::pipeline CLI11::CLI11)
     npk_target_warnings(tune_sim)
 endif()
+
+# Test and tool binaries go to <bin folder>/tests/, next to the exe's folder.
+if(PROJECT_IS_TOP_LEVEL)
+    foreach(_npk_test_target IN ITEMS core_tests pipeline_tests core_extract tune_sim)
+        if(TARGET ${_npk_test_target})
+            set_target_properties(${_npk_test_target} PROPERTIES
+                RUNTIME_OUTPUT_DIRECTORY "$<1:${NPKEXTPP_BIN_DIR}/tests>")
+        endif()
+    endforeach()
+endif()

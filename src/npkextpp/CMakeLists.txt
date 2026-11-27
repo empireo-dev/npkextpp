@@ -34,10 +34,10 @@ target_compile_definitions(npkextpp PRIVATE NPKEXTPP_VERSION="${PROJECT_VERSION}
 target_link_libraries(npkextpp PRIVATE npk::pipeline CLI11::CLI11 ftxui::dom ftxui::screen)
 npk_target_warnings(npkextpp)
 
-# Built on its own: the exe lands at the top of the build folder (build/npkextpp,
-# build/npkextpp.exe), not buried in build/src/npkextpp/.
+# Built on its own: the exe sits at the root of its bin folder (see the top-level
+# CMakeLists.txt). $<1:...> keeps multi-config generators from adding Release/.
 if(PROJECT_IS_TOP_LEVEL)
-    set_target_properties(npkextpp PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${PROJECT_BINARY_DIR}")
+    set_target_properties(npkextpp PROPERTIES RUNTIME_OUTPUT_DIRECTORY "$<1:${NPKEXTPP_BIN_DIR}>")
 endif()
 
 if(MINGW)

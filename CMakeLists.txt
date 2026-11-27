@@ -49,6 +49,29 @@ if(_npk_top)
     endif()
 endif()
 
+# --- Where the binaries go -----------------------------------------------------
+# The presets (CMakePresets.json) keep build trees and binaries apart, all in out/:
+#   out/build            out/bin             Release (Linux, macOS)
+#   out/build-debug      out/bin-debug       Debug
+#   out/build-win        out/bin-win         Release (Windows, MSVC)
+#   out/build-win-debug  out/bin-win-debug   Debug
+# The exe sits at the root of its bin folder, tests and tools in bin*/tests/.
+# Without a preset, a build tree named out/build* gets the matching out/bin*;
+# any other gets <build tree>/bin.
+if(_npk_top)
+    if(NOT NPKEXTPP_BIN_DIR)
+        get_filename_component(_npk_build_name "${PROJECT_BINARY_DIR}" NAME)
+        get_filename_component(_npk_build_parent "${PROJECT_BINARY_DIR}" DIRECTORY)
+        if(_npk_build_name MATCHES "^build(.*)$")
+            set(_npk_bin "${_npk_build_parent}/bin${CMAKE_MATCH_1}")
+        else()
+            set(_npk_bin "${PROJECT_BINARY_DIR}/bin")
+        endif()
+        set(NPKEXTPP_BIN_DIR "${_npk_bin}" CACHE PATH "Where npkextpp and the test binaries are written")
+    endif()
+    message(STATUS "npkextpp binaries: ${NPKEXTPP_BIN_DIR}")
+endif()
+
 find_package(Threads REQUIRED)
 
 add_subdirectory(third_party)

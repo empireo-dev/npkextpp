@@ -31,9 +31,9 @@ jobs:
       - name: Build (Linux)
         if: runner.os == 'Linux'
         run: |
-          cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DNPKEXTPP_FULLY_STATIC=ON
-          cmake --build build
-          cmake -E copy build/npkextpp "${{ matrix.asset }}"
+          cmake --preset build -DNPKEXTPP_FULLY_STATIC=ON
+          cmake --build --preset build
+          cmake -E copy out/bin/npkextpp "${{ matrix.asset }}"
 
       - name: Set up MSVC (Windows)
         if: runner.os == 'Windows'
@@ -46,9 +46,9 @@ jobs:
         if: runner.os == 'Windows'
         shell: bash
         run: |
-          cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
-          cmake --build build
-          cmake -E copy build/npkextpp.exe "${{ matrix.asset }}"
+          cmake --preset build-win
+          cmake --build --preset build-win
+          cmake -E copy out/bin-win/npkextpp.exe "${{ matrix.asset }}"
 
       - name: Upload binary
         uses: actions/upload-artifact@v4

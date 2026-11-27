@@ -6,8 +6,8 @@ the right answer (cached in --work), then runs the tuner with several stall
 seeds. A tuned run passes when the count it ends at is within 10 % of the best
 fixed throughput, and (where given) the scenario's own check holds.
 
-    python3 tests/bench/tuner_scenarios.py --install build/bench/install \
-        --tune-sim build/tests/tune_sim --work build/bench/tuner [--only ssd hdd] [--seeds 3]
+    python3 tests/bench/tuner_scenarios.py --install out/bench/install \
+        --tune-sim out/bin/tests/tune_sim --work out/bench/tuner [--only ssd hdd] [--seeds 3]
 """
 import argparse
 import json

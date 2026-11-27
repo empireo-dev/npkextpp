@@ -5,8 +5,8 @@ on the same installation, and check that they write the same files.
 Before each run the archives are dropped from the OS cache (posix_fadvise
 DONTNEED, no root needed), so every tool reads them from the disk.
 
-    python3 tests/bench/run_bench.py --npkext ../npkext --install build/bench/install \\
-        --work build/bench --core build/tests/core_extract --app build/npkextpp
+    python3 tests/bench/run_bench.py --npkext ../npkext --install out/bench/install \\
+        --work out/bench --core out/bin/tests/core_extract --app out/bin/npkextpp
 """
 
 from __future__ import annotations

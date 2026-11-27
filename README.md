@@ -120,53 +120,68 @@ auto bytes = decoder.read(*archive, *archive->find("login\\bg.png")); // check, 
 
 ## Build
 
-Needs CMake 3.25+ and a C++23 compiler (GCC 13+, Clang 17+, MSVC 2022 17.6+). No network access.
+Needs CMake 3.25+, Ninja and a C++23 compiler (GCC 13+, Clang 17+, MSVC 2022 17.6+). No network access.
 
 ```bash
-cmake -S . -B build -G Ninja
-cmake --build build
+cmake --preset build
+cmake --build --preset build
 ```
 
-On Windows with MSVC, run these from a "x64 Native Tools Command Prompt for VS"
-(or after `vcvars64.bat`) so the compiler and Ninja are on `PATH`. Visual
-Studio's bundled CMake and Ninja also work from the IDE.
+On Windows, use `build-win` instead of `build`, from an "x64 Native Tools Command
+Prompt for VS" (or after `vcvars64.bat`) so MSVC and Ninja are on `PATH`. Visual
+Studio and VS Code list the presets too.
 
-The result is a single file, `build/npkextpp` (`build/npkextpp.exe`), with no
-DLLs, configs or resources next to it:
+Everything a build makes goes into `out/`, build trees and binaries apart:
+
+| preset | build tree | binaries |
+|---|---|---|
+| `build` | `out/build` | `out/bin` |
+| `build-debug` | `out/build-debug` | `out/bin-debug` |
+| `build-win` | `out/build-win` | `out/bin-win` |
+| `build-win-debug` | `out/build-win-debug` | `out/bin-win-debug` |
+
+The exe sits at the root of its bin folder (`out/bin/npkextpp`,
+`out/bin-win/npkextpp.exe`): a single file, with no DLLs, configs or resources
+next to it.
 
 - MSVC: static runtime (`/MT`).
 - MinGW: `-static`.
 - Linux: libstdc++/libgcc linked in, glibc dynamic. `-DNPKEXTPP_FULLY_STATIC=ON` links fully statically.
 
+Without a preset (`cmake -S . -B out/build-asan ...`), a build tree named
+`out/build*` still gets the matching `out/bin*`.
+
 ## Tests
 
 ```bash
-cmake -S . -B build -G Ninja -DNPKEXTPP_BUILD_TESTS=ON
-cmake --build build
-ctest --test-dir build
+cmake --preset build -DNPKEXTPP_BUILD_TESTS=ON
+cmake --build --preset build
+ctest --preset build
 ```
+
+The test and tool binaries go to `out/bin/tests/`.
 
 Comparison with the Python npkext on random synthetic installations (needs npkext
 and its Python dependencies):
 
 ```bash
-python3 tests/compare_with_npkext.py --npkext ../npkext --extractor build/npkextpp --index --seeds 20
+python3 tests/compare_with_npkext.py --npkext ../npkext --extractor out/bin/npkextpp --index --seeds 20
 ```
 
 Benchmark on a synthetic ~2 GB installation (put it on the disk you want to measure):
 
 ```bash
-python3 tests/bench/make_install.py --npkext ../npkext --out build/bench
-python3 tests/bench/run_bench.py --npkext ../npkext --install build/bench/install --work build/bench \
-    --core build/tests/core_extract --app build/npkextpp
+python3 tests/bench/make_install.py --npkext ../npkext --out out/bench
+python3 tests/bench/run_bench.py --npkext ../npkext --install out/bench/install --work out/bench \
+    --core out/bin/tests/core_extract --app out/bin/npkextpp
 ```
 
 The tuner against a simulated SSD or HDD, writing nothing
 ([docs/simulated_disk.md](docs/simulated_disk.md)):
 
 ```bash
-build/tests/tune_sim --disk ssd --curve --file-size 65536
-build/tests/tune_sim --disk hdd --install build/bench/install --set switch_cost=300us
+out/bin/tests/tune_sim --disk ssd --curve --file-size 65536
+out/bin/tests/tune_sim --disk hdd --install out/bench/install --set switch_cost=300us
 ```
 
 ## Using the core from another project
