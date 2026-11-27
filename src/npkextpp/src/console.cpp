@@ -329,7 +329,14 @@ Console::~Console()
 int Console::width() const
 {
     if (!interactive_) return kWidthWithoutTerminal;
+#if defined(_WIN32)
+    // The Windows console moves to the next line as soon as the last column is
+    // written, so a full-width line takes two rows and every redraw lands lower
+    // than the last. One column less keeps a frame exactly as tall as it says.
+    return std::max(ftxui::Terminal::Size().dimx - 1, 40);
+#else
     return std::max(ftxui::Terminal::Size().dimx, 40);
+#endif
 }
 
 int Console::height() const
