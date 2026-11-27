@@ -26,6 +26,10 @@ npkext's (0 ok, 1 some entries failed, 2 bad input, 130 interrupted), plus:
   or client (global, TW, CN) works and archives added by an update are found.
   Folders of the installation that cannot be opened (permission denied) are named
   in a warning, as is a missing name manifest.
+- `--resdb FILE...` gives the name manifests by hand, for archives copied out of
+  the installation. Give both, `Documents/res/resdb` (from the patches) and
+  `res/resdb` (from the installer): each has names the other lacks, and they
+  are merged. Without it, an archive inside an installation gets both on its own.
 - `--overwrite` writes every file again. Without it, files already in the output
   folder with the right size are kept, so a second run, or one after an
   interrupted run, writes only what is missing.

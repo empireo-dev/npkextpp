@@ -33,7 +33,8 @@ examples:
 
   # archives given by their file path
   npkextpp --in path/to/res/model/texture.npk --out unpacked
-  npkextpp --in copy/ui.npk --resdb path/to/res/resdb --out unpacked
+  # a copy outside the installation: give both name manifests (each has names the other lacks)
+  npkextpp --in copy/ui.npk --resdb path/to/Documents/res/resdb path/to/res/resdb --out unpacked
 
   # replace one file inside an archive with a new version
   npkextpp update --new my_bg.png --path login/bg.png --target "path/to/Magic Awakened/res/ui.npk"
@@ -60,7 +61,8 @@ std::optional<CliOptions> parse_cli(int argc, char** argv, int& exit_code)
                    "or paths inside it (Documents/res/ui.npk). Default: every archive")
         ->group(source)
         ->expected(1, -1);
-    app.add_option("--resdb", options.resdb, "name manifests to use instead of the installation's")
+    app.add_option("--resdb", options.resdb, "name manifests to use instead of the installation's (several allowed: give both "
+                   "Documents/res/resdb and res/resdb)")
         ->group(source)
         ->expected(1, -1);
 
