@@ -120,36 +120,16 @@ auto bytes = decoder.read(*archive, *archive->find("login\\bg.png")); // check, 
 
 ## Build
 
-Needs CMake 3.25+, Ninja and a C++23 compiler (GCC 13+, Clang 17+, MSVC 2022 17.6+). No network access.
+[BUILDING.md](BUILDING.md) has everything: the tools to install (aimed at a
+first-time builder), the presets, every option, tests and other setups. In short:
 
 ```bash
-cmake --preset build
+cmake --preset build          # Windows: build-win, in an x64 Native Tools Command Prompt
 cmake --build --preset build
 ```
 
-On Windows, use `build-win` instead of `build`, from an "x64 Native Tools Command
-Prompt for VS" (or after `vcvars64.bat`) so MSVC and Ninja are on `PATH`. Visual
-Studio and VS Code list the presets too.
-
-Everything a build makes goes into `out/`, build trees and binaries apart:
-
-| preset | build tree | binaries |
-|---|---|---|
-| `build` | `out/build` | `out/bin` |
-| `build-debug` | `out/build-debug` | `out/bin-debug` |
-| `build-win` | `out/build-win` | `out/bin-win` |
-| `build-win-debug` | `out/build-win-debug` | `out/bin-win-debug` |
-
-The exe sits at the root of its bin folder (`out/bin/npkextpp`,
-`out/bin-win/npkextpp.exe`): a single file, with no DLLs, configs or resources
-next to it.
-
-- MSVC: static runtime (`/MT`).
-- MinGW: `-static`.
-- Linux: libstdc++/libgcc linked in, glibc dynamic. `-DNPKEXTPP_FULLY_STATIC=ON` links fully statically.
-
-Without a preset (`cmake -S . -B out/build-asan ...`), a build tree named
-`out/build*` still gets the matching `out/bin*`.
+The program is then `out/bin/npkextpp` (`out\bin-win\npkextpp.exe`), one file
+with no DLLs, configs or resources next to it.
 
 ## Tests
 
