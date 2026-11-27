@@ -453,6 +453,12 @@ TEST(resolve_inputs)
 
     auto need_install = npk::resolve_inputs(strings({"ui"}), nullptr);
     CHECK(!need_install && need_install.error().message.find("--install") != std::string::npos);
+    // A folder (as dropped onto the exe): every archive below it, without an installation too.
+    auto folder = npk::resolve_inputs(std::vector<std::string>{npk::to_utf8(root / "res")}, nullptr);
+    CHECK(folder && folder->size() == 2u);   // res/ui.npk, res/model/hero.npk
+    const fs::path empty = root / "empty";
+    fs::create_directories(empty);
+    CHECK(!npk::resolve_inputs(std::vector<std::string>{npk::to_utf8(empty)}, nullptr));
     auto bad_path = npk::resolve_inputs(strings({"nowhere/x.npk"}), &*installation);
     CHECK(!bad_path && bad_path.error().message.find("no archive at") != std::string::npos);
 }

@@ -300,8 +300,16 @@ Result<std::vector<fs::path>> resolve_inputs(std::span<const std::string> inputs
     std::vector<std::string> names;
     for (const std::string& value : inputs) {
         const fs::path path = from_utf8(value);
+        std::error_code error;
         if (is_file(path)) {
             found.push_back(path);
+        } else if (fs::is_directory(path, error)) {
+            // A folder: every archive below it (folders marked .noscan left out).
+            const FolderScan scan = scan_folder(path);
+            if (scan.archives.empty()) {
+                return make_error(Errc::invalid_input, "no .npk archives in the folder " + value);
+            }
+            found.insert(found.end(), scan.archives.begin(), scan.archives.end());
         } else if (installation == nullptr || path.is_absolute()) {
             return make_error(Errc::invalid_input,
                               "archive not found: " + value +

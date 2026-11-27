@@ -383,6 +383,21 @@ bool Console::owns_window()
 #endif
 }
 
+void Console::start_in_program_folder()
+{
+#if defined(_WIN32)
+    if (!owns_window()) return;
+    std::wstring path(32768, L'\0');
+    const DWORD length = ::GetModuleFileNameW(nullptr, path.data(), static_cast<DWORD>(path.size()));
+    if (length == 0 || length >= path.size()) return;
+    path.resize(length);
+    const std::size_t slash = path.find_last_of(L"\\/");
+    if (slash == std::wstring::npos) return;
+    path.resize(slash);
+    ::SetCurrentDirectoryW(path.c_str());
+#endif
+}
+
 void Console::print(const ftxui::Element& element)
 {
     element->ComputeRequirement();

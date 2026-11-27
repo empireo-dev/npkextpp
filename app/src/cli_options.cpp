@@ -31,7 +31,7 @@ examples:
   # show what would be unpacked, write nothing
   npkextpp --install "path/to/Magic Awakened" --dry-run
 
-  # archives given by their file path
+  # archives given by their file path (or dropped onto the exe: the same without --in)
   npkextpp --in path/to/res/model/texture.npk --out unpacked
   # a copy outside the installation: give both name manifests (each has names the other lacks)
   npkextpp --in copy/ui.npk --resdb path/to/Documents/res/resdb path/to/res/resdb --out unpacked
@@ -58,10 +58,14 @@ std::optional<CliOptions> parse_cli(int argc, char** argv, int& exit_code)
                    "folder if it is one; if not, it is searched for archives and name manifests")
         ->group(source);
     app.add_option("--in", options.inputs,
-                   "archives: file paths, names searched in the installation (ui, 'res_dlc_*'), "
+                   "archives: file or folder paths, names searched in the installation (ui, 'res_dlc_*'), "
                    "or paths inside it (Documents/res/ui.npk). Default: every archive")
         ->group(source)
         ->expected(1, -1);
+    std::vector<std::string> paths;
+    app.add_option("paths", paths,
+                   "archives or folders, as with --in (what Windows passes when files are dropped onto the exe)")
+        ->group(source);
     app.add_option("--resdb", options.resdb, "name manifests to use instead of the installation's (several allowed: give both "
                    "Documents/res/resdb and res/resdb)")
         ->group(source)
@@ -123,6 +127,7 @@ std::optional<CliOptions> parse_cli(int argc, char** argv, int& exit_code)
     options.verify = !no_verify;
     if (update_command->parsed()) options.update = update;
     options.guided = argc <= 1;
+    options.inputs.insert(options.inputs.end(), paths.begin(), paths.end());
     exit_code = kExitOk;
     return options;
 }

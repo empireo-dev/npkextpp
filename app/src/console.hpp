@@ -55,6 +55,11 @@ public:
     // a double-click or a drop on the exe), so it closes the moment we exit.
     [[nodiscard]] static bool owns_window();
 
+    // Started from Explorer (owns_window): makes the exe's folder the current
+    // one, as a double-click does, since a drop onto the exe may start it
+    // elsewhere. Elsewhere it does nothing.
+    static void start_in_program_folder();
+
     [[nodiscard]] bool interactive() const noexcept { return interactive_; }
     [[nodiscard]] int width() const;    // of the terminal (100 when not a terminal)
     [[nodiscard]] int height() const;   // of the terminal (0 when not a terminal)

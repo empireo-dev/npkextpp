@@ -187,6 +187,12 @@ Inputs find_archives(const CliOptions& options, Console& console)
                 inputs.manifests = inputs.installation->resdb_files();
             }
         }
+        for (const std::string& value : options.inputs) {   // a folder given (or dropped): its manifests too
+            std::error_code error;
+            if (fs::is_directory(npk::from_utf8(value), error)) {
+                add_manifests(inputs.manifests, npk::scan_folder(npk::from_utf8(value)).manifests);
+            }
+        }
     } else if (inputs.installation) {
         inputs.archives = inputs.installation->archives();
         if (inputs.archives.empty()) {
@@ -725,6 +731,7 @@ int main(int argc, char** argv)
     const std::optional<CliOptions> parsed = parse_cli(argc, argv, exit_code);
     if (!parsed) return exit_code;
     CliOptions options = *parsed;
+    Console::start_in_program_folder();   // before "." and ./unpacked mean anything
     if (!options.out) options.out = fs::path("unpacked");
 
     if (options.show_licenses) {

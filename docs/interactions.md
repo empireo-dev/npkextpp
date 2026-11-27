@@ -52,6 +52,27 @@ Nothing found: the run ends with an error that says where to put the exe.
 With any argument given there is no question: the options say what to do. The
 defaults above still apply.
 
+## Dropping archives or folders onto the exe
+
+Windows starts the exe with the dropped paths as its arguments. Paths alone,
+without options, act as `--in`, with the same defaults as a double-click:
+`--install` is the current folder if it is an installation, `--out` is
+`./unpacked`. There is no question: what was dropped is what gets unpacked.
+
+- **A dropped archive** is unpacked. When it lies inside an installation, that
+  installation is found by walking up from it, so its names and override rules
+  apply, wherever the exe is.
+- **A dropped folder** stands for every archive below it (folders marked
+  `.noscan` left out), and the name manifests found in it are used too.
+  `--in FOLDER` does the same.
+- **The current folder:** when Explorer starts the exe (a double-click or a
+  drop), npkextpp first makes the exe's folder the current one. A drop may
+  start a program in another folder; this way `.` and `./unpacked` are always
+  next to the exe. From cmd or PowerShell the current folder is left as it is.
+- **The window stays open** at the end, as after a double-click.
+
+The same works from any terminal: `npkextpp path/to/ui.npk path/to/folder`.
+
 ## The steps before unpacking
 
 The search only lists the files of the installation: it opens no archive and
@@ -113,8 +134,8 @@ and Windows Terminal. The Windows side has not been tested yet.
   exe in its own folder. Linux file managers mostly don't run a console program
   on a double-click; there it is started from a terminal (`./npkextpp`),
   and the same flow follows.
-- **Dropping files or folders onto the exe (not built yet):** Windows starts the
-  exe with the dropped paths as arguments. Linux file managers don't, unless a
+- **Dropping files or folders onto the exe:** Windows starts the exe with the
+  dropped paths as arguments (above). Linux file managers don't, unless a
   `.desktop` launcher is set up. macOS needs an app bundle.
 - **Dropping a file onto an open console window** types its path, in every
   system's terminal, so a question that asks for a path works everywhere.

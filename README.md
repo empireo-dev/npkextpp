@@ -29,8 +29,10 @@ npkext's (0 ok, 1 some entries failed, 2 bad input, 130 interrupted), plus:
 - Without options: `--install` is the current folder if it is an installation,
   and `--out` is `./unpacked`. With no arguments at all (a double-click on the
   exe in the game's folder), the app searches the current folder, shows what it
-  found and asks "Do you want to unpack all? (Y/n)". See
-  [docs/interactions.md](docs/interactions.md).
+  found and asks "Do you want to unpack all? (Y/n)". Archives or folders
+  dropped onto the exe (paths without options) act as `--in`, with the same
+  defaults. A folder, dropped or given to `--in`, stands for every archive
+  below it. See [docs/interactions.md](docs/interactions.md).
 - `--resdb FILE...` gives the name manifests by hand, for archives copied out of
   the installation. Give both, `Documents/res/resdb` (from the patches) and
   `res/resdb` (from the installer): each has names the other lacks, and they

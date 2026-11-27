@@ -13,6 +13,7 @@ namespace npk {
 
 // Turns the values given on the command line into archive files. Each value is:
 //   * a path to an archive file                          path/to/ui.npk
+//   * a path to a folder: every archive below it         path/to/res (see scan_folder)
 //   * with an installation: an archive name, searched    ui.npk, ui, 'res_dlc_*'
 //     in every mount folder of the installation
 //   * with an installation: a path relative to it        res/ui.npk, 'Documents/res/*.npk'
