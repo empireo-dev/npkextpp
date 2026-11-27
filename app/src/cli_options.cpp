@@ -26,7 +26,7 @@ examples:
   npkextpp --install "path/to/Magic Awakened" --in Documents/res/ui.npk --out unpacked
 
   # one file, by its path in the game's tree
-  npkextpp --install "path/to/Magic Awakened" --entry ui/login/bg.png --out .
+  npkextpp --install "path/to/Magic Awakened" --entry ui/login/bg.png --out extracted
 
   # show what would be unpacked, write nothing
   npkextpp --install "path/to/Magic Awakened" --dry-run

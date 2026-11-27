@@ -16,7 +16,7 @@ npkextpp --install "path/to/Magic Awakened" --out unpacked
 npkextpp --install "path/to/Magic Awakened" --in character.npk ui --out unpacked
 
 # one file, by its path in the game's tree
-npkextpp --install "path/to/Magic Awakened" --entry ui/login/bg.png --out .
+npkextpp --install "path/to/Magic Awakened" --entry ui/login/bg.png --out extracted
 ```
 
 `npkextpp --help` lists every option. The options and exit codes are the same as
@@ -35,6 +35,12 @@ npkext's (0 ok, 1 some entries failed, 2 bad input, 130 interrupted), plus:
   the installation. Give both, `Documents/res/resdb` (from the patches) and
   `res/resdb` (from the installer): each has names the other lacks, and they
   are merged. Without it, an archive inside an installation gets both on its own.
+- **`.noscan`:** every folder npkextpp unpacks into gets a `.noscan` file, and
+  the archive scan leaves out every folder holding one, with all of its
+  subfolders. So an output folder inside the game's folder (`./unpacked` on a
+  double-click) is not searched through again on the next run. The scan lists
+  the folders it skipped this way. The file explains itself; delete it to have
+  the folder scanned again, or put one into any folder the scan should leave out.
 - `--overwrite` writes every file again. Without it, files already in the output
   folder with the right size are kept, so a second run, or one after an
   interrupted run, writes only what is missing.

@@ -92,43 +92,66 @@ class ScanDisplay {
 public:
     ScanDisplay(Console& console, const fs::path& folder) : console_(console), folder_(absolute_text(folder)) {}
 
-    void operator()(std::size_t archives, std::size_t manifests)
+    void operator()(const npk::FolderScan& so_far)
     {
         const auto now = std::chrono::steady_clock::now();
         if (now - last_ < std::chrono::milliseconds(50)) return;
         last_ = now;
-        console_.draw(ftxui::vbox({ftxui::text("Scanning      " + folder_), ftxui::text(counts(archives, manifests).first),
-                                   ftxui::text(counts(archives, manifests).second)}));
+        ftxui::Elements rows{ftxui::text("Scanning      " + folder_)};
+        for (const std::string& row : lines(so_far.archives.size(), so_far.manifests.size(), so_far.skipped)) {
+            rows.push_back(ftxui::paragraph(row));
+        }
+        console_.draw(ftxui::vbox(std::move(rows)));
     }
 
     void finish(std::string_view label, std::size_t archives, std::size_t manifests,
-                const std::vector<std::string>& unreadable)
+                const std::vector<std::string>& skipped, const std::vector<std::string>& unreadable)
     {
         console_.clear_frame();
         console_.line(std::string(label) + folder_);
-        console_.line(counts(archives, manifests).first);
-        console_.line(counts(archives, manifests).second);
+        for (const std::string& row : lines(archives, manifests, skipped)) console_.line(row);
         if (unreadable.empty()) return;
-        std::string names;
-        for (std::size_t i = 0; i < unreadable.size() && i < 8; ++i) names += (i ? ", " : "") + unreadable[i];
-        if (unreadable.size() > 8) names += " and " + format_count(unreadable.size() - 8) + " more";
         console_.line("Warning       " + format_count(unreadable.size()) +
                       (unreadable.size() == 1 ? " folder" : " folders") +
                       " cannot be opened (permission denied), so the archives in " +
-                      (unreadable.size() == 1 ? "it" : "them") + " are left out: " + names);
+                      (unreadable.size() == 1 ? "it" : "them") + " are left out: " + list(unreadable));
     }
 
 private:
-    static std::pair<std::string, std::string> counts(std::size_t archives, std::size_t manifests)
+    static std::string list(const std::vector<std::string>& folders)
     {
-        return {"Archives found (.npk): " + format_count(archives),
-                "Resource manifests found (resdb): " + format_count(manifests)};
+        std::string names;
+        for (std::size_t i = 0; i < folders.size() && i < 8; ++i) {
+            names += (i ? ", " : "") + (folders[i] == "." ? std::string("this folder") : folders[i]);
+        }
+        if (folders.size() > 8) names += " and " + format_count(folders.size() - 8) + " more";
+        return names;
+    }
+
+    static std::vector<std::string> lines(std::size_t archives, std::size_t manifests,
+                                          const std::vector<std::string>& skipped)
+    {
+        std::vector<std::string> out{"Archives found (.npk): " + format_count(archives),
+                                     "Resource manifests found (resdb): " + format_count(manifests)};
+        if (!skipped.empty()) {
+            out.push_back("Skipped (.noscan): " + format_count(skipped.size()) +
+                          (skipped.size() == 1 ? " folder" : " folders") + ": " + list(skipped));
+        }
+        return out;
     }
 
     Console& console_;
     std::string folder_;
     std::chrono::steady_clock::time_point last_{};
 };
+
+// Why nothing was found, when the searched folder itself is marked.
+std::string marked_root(const std::vector<std::string>& skipped)
+{
+    if (std::ranges::find(skipped, ".") == skipped.end()) return "";
+    return std::string(" (it holds a ") + npk::kNoScanFileName + " file, so it is not searched; delete the file to "
+           "have it searched)";
+}
 
 void add_manifests(std::vector<fs::path>& to, const std::vector<fs::path>& more)
 {
@@ -147,9 +170,10 @@ Inputs find_archives(const CliOptions& options, Console& console)
     if (!install && npk::Installation::looks_like_one(".")) install = fs::path(".");
     if (install) {
         ScanDisplay display(console, *install);
-        inputs.installation = unwrap(npk::Installation::open(*install, std::ref(display), {*options.out}));
+        inputs.installation = unwrap(npk::Installation::open(*install, std::ref(display)));
         const npk::Installation& found = *inputs.installation;
-        display.finish("Installation  ", found.archives().size(), found.resdb_files().size(), found.unreadable_folders());
+        display.finish("Installation  ", found.archives().size(), found.resdb_files().size(), found.skipped_folders(),
+                       found.unreadable_folders());
         inputs.manifests = found.resdb_files();
     }
 
@@ -166,14 +190,15 @@ Inputs find_archives(const CliOptions& options, Console& console)
     } else if (inputs.installation) {
         inputs.archives = inputs.installation->archives();
         if (inputs.archives.empty()) {
-            throw InputError("no .npk files found in " + npk::to_utf8(inputs.installation->root()));
+            throw InputError("no .npk files found in " + npk::to_utf8(inputs.installation->root()) +
+                             marked_root(inputs.installation->skipped_folders()));
         }
     } else {
         ScanDisplay display(console, ".");
-        npk::FolderScan scan = npk::scan_folder(".", std::ref(display), {*options.out});
-        display.finish("Folder        ", scan.archives.size(), scan.manifests.size(), scan.unreadable);
+        npk::FolderScan scan = npk::scan_folder(".", std::ref(display));
+        display.finish("Folder        ", scan.archives.size(), scan.manifests.size(), scan.skipped, scan.unreadable);
         if (scan.archives.empty()) {
-            throw InputError("no .npk archives found in " + absolute_text(".") +
+            throw InputError("no .npk archives found in " + absolute_text(".") + marked_root(scan.skipped) +
                              ". Put npkextpp in the game's folder (the one with neox_bin/, res/ and Documents/), "
                              "or give --install DIR or --in FILE (--help lists every option).");
         }
@@ -190,6 +215,14 @@ Inputs find_archives(const CliOptions& options, Console& console)
                      (inputs.archives.size() == 1 ? " archive" : " archives"));
     }
     return inputs;
+}
+
+// Puts .noscan into the output folder, so later scans leave the unpacked files out.
+void mark_output(Console& console, const fs::path& out)
+{
+    if (auto marked = npk::mark_no_scan(out); !marked) {
+        console.line("Warning       " + marked.error().message + ": later scans will search the unpacked files too");
+    }
 }
 
 // No arguments at all (a double-click): asks before unpacking. False: the user said no.
@@ -381,6 +414,7 @@ int extract_entry(Console& console, npk::Plan& plan, std::string wanted, const f
                 }
                 const std::string relative = npk::output_path(planned, *data);
                 const fs::path target = out / npk::from_utf8(relative);
+                mark_output(console, out);
                 std::error_code error;
                 fs::create_directories(target.parent_path(), error);
                 std::ofstream file(npk::long_path(target), std::ios::binary | std::ios::trunc);
@@ -480,6 +514,7 @@ int run(const CliOptions& options, Console& console)
 
     std::error_code space_error;
     fs::create_directories(*options.out, space_error);
+    mark_output(console, *options.out);
     const auto space = fs::space(*options.out, space_error);
     if (!space_error) {
         console.line("              " + format_bytes(plan.totals.raw_bytes) + " to write, " +

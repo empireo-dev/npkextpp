@@ -1,4 +1,5 @@
 #include "npk/archive_update.hpp"
+#include "npk/install.hpp"
 
 #include "npk/archive.hpp"
 #include "npk/decoder.hpp"
@@ -220,6 +221,7 @@ Result<std::vector<FolderFile>> folder_files(const fs::path& folder)
             continue;
         }
         if (!it->is_regular_file(type_error)) continue;
+        if (it->path().filename() == kNoScanFileName) continue;   // npkextpp's marker, not the game's
         std::string inner = with_backslashes(to_utf8(relative));
         FolderFile entry{it->path(), inner, path_id(inner)};
         // _unnamed/0123abcd.ext: the id itself.

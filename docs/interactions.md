@@ -28,8 +28,9 @@ works when it is put into the game's folder.
    ```
 
    When it ends, `Scanning` becomes `Installation` (or `Folder` when the folder
-   is not an installation), and the counts stay on screen. Folders that cannot
-   be opened are named in a warning.
+   is not an installation), and the counts stay on screen, with the folders
+   skipped for their `.noscan` file. Folders that cannot be opened are named in
+   a warning.
 2. **Question.**
 
    ```
@@ -53,9 +54,20 @@ defaults above still apply.
 
 ## What the search leaves out
 
-- **Unpacked folders:** the output folder, and every folder that holds an
-  `_archives/` folder (an earlier unpack, wherever it was written). A second
-  run therefore doesn't walk the half a million files of the first.
+- **Folders marked `.noscan`:** a folder that holds a file named `.noscan` is
+  left out with all of its subfolders, recursively. npkextpp writes one into
+  every folder it unpacks into (a full unpack or `--entry`), so the output,
+  wherever it is, is never searched through again: a second run doesn't walk the
+  half a million files of the first. The file says the same in a few lines.
+  Delete it to have the folder searched again; put one anywhere to keep the
+  search out. The counter lists the skipped folders as it finds them:
+
+  ```
+  Skipped (.noscan): 1 folder: unpacked
+  ```
+
+  When the searched folder itself is marked, nothing is found, and the error
+  says so.
 - **Symbolic links.**
 - **Manifests in name only:** a file counts as a manifest only when it is named
   `resdb` and starts like one (`CCZ!`).

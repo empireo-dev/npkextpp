@@ -468,29 +468,44 @@ TEST(every_archive_of_the_installation_is_found)
     CHECK(installation->resdb_files() == std::vector<fs::path>{installation->root() / "res" / "resdb"});
 }
 
-TEST(a_walk_counts_manifests_and_leaves_out_unpacked_folders)
+TEST(a_walk_counts_manifests_and_leaves_out_folders_marked_noscan)
 {
     TempDir dir;
     const fs::path root = fake_install(dir.path());
     write_resdb(root / "Documents" / "res" / "resdb", {"ui\\new.png"});
     write_file(root / "Documents" / "resdb", Bytes{std::byte{'n'}, std::byte{'o'}});   // named resdb, not a manifest
-    // Earlier unpacks inside the installation: a finished one (_archives/) and the folder given as the output.
-    write_file(root / "unpacked" / "_archives" / "index.csv", Bytes{});
+    // An earlier unpack inside the installation, marked; its subfolders are left out too.
     write_file(root / "unpacked" / "res" / "copied.npk", Bytes{});
-    write_file(root / "here" / "res" / "copied.npk", Bytes{});
+    write_file(root / "unpacked" / "res" / "deep" / "resdb", Bytes{});
+    CHECK(npk::mark_no_scan(root / "unpacked").has_value());
+    CHECK(npk::mark_no_scan(root / "unpacked").has_value());   // already there: left as it is
+    {
+        std::ifstream marker(root / "unpacked" / npk::kNoScanFileName);
+        const std::string text((std::istreambuf_iterator<char>(marker)), std::istreambuf_iterator<char>());
+        CHECK(text == npk::kNoScanText);
+    }
+    write_file(root / "notes" / ".noscan.txt", Bytes{});   // only the exact name counts
+    write_file(root / "notes" / "copied.npk", Bytes{});
 
     std::size_t calls = 0, last_archives = 0;
-    const npk::FolderScan scan = npk::scan_folder(root, [&](std::size_t archives, std::size_t) {
+    const npk::FolderScan scan = npk::scan_folder(root, [&](const npk::FolderScan& so_far) {
         ++calls;
-        last_archives = archives;
-    }, {root / "here"});
-    CHECK_EQ(scan.archives.size(), 6u);
+        last_archives = so_far.archives.size();
+    });
+    CHECK_EQ(scan.archives.size(), 7u);
     CHECK_EQ(scan.manifests.size(), 2u);
-    CHECK(calls > 0 && last_archives == 6u);
+    CHECK(scan.skipped == strings({"unpacked"}));
+    CHECK(calls > 0 && last_archives == 7u);
 
-    const auto installation = npk::Installation::open(root, {}, {root / "here"});
-    CHECK(installation && installation->archives().size() == 6u && installation->resdb_files().size() == 2u);
+    const auto installation = npk::Installation::open(root);
+    CHECK(installation && installation->archives().size() == 7u && installation->resdb_files().size() == 2u);
+    CHECK(installation->skipped_folders() == strings({"unpacked"}));
     CHECK(npk::Installation::looks_like_one(root) && !npk::Installation::looks_like_one(root / "res"));
+
+    // The searched folder itself marked: nothing is found, and that is said.
+    CHECK(npk::mark_no_scan(root).has_value());
+    const npk::FolderScan none = npk::scan_folder(root);
+    CHECK(none.archives.empty() && none.skipped == strings({"."}));
 }
 
 TEST(folders_that_cannot_be_opened_are_reported)
@@ -798,6 +813,7 @@ TEST(a_folder_replaces_the_files_at_the_same_paths)
     std::snprintf(unnamed, sizeof unnamed, "%08x.bin", npk::path_id("secret"));
     write_file(folder / "_unnamed" / unnamed, bytes("found by id"));
     write_file(folder / "_archives" / "index.csv", bytes("not a file of the archive"));
+    CHECK(npk::mark_no_scan(folder).has_value());   // nor is the marker
 
     auto files = npk::folder_files(folder);
     CHECK(files.has_value() && files->size() == 4u);

@@ -43,11 +43,16 @@ bool is_manifest(const fs::path& path)
 
 } // namespace
 
-FolderScan scan_folder(const fs::path& root_folder, const ScanProgress& progress, const std::vector<fs::path>& skip)
+std::string relative_text(const fs::path& path, const fs::path& root)
+{
+    std::string rel = to_utf8(path.lexically_relative(root));
+    std::ranges::replace(rel, '\\', '/');
+    return rel.empty() || rel == "." ? std::string(".") : rel;
+}
+
+FolderScan scan_folder(const fs::path& root_folder, const ScanProgress& progress)
 {
     const fs::path root = resolved(root_folder);
-    std::vector<fs::path> skipped;
-    for (const fs::path& folder : skip) skipped.push_back(resolved(folder));
     FolderScan found;
     std::vector<fs::path> folders{root};
     std::vector<fs::path> archives, manifests, below;   // of one folder
@@ -57,38 +62,53 @@ FolderScan scan_folder(const fs::path& root_folder, const ScanProgress& progress
         std::error_code error;
         fs::directory_iterator it(folder, error);
         if (error) {
-            std::string rel = to_utf8(folder.lexically_relative(root));
-            std::ranges::replace(rel, '\\', '/');
-            found.unreadable.push_back(rel.empty() || rel == "." ? std::string(".") : rel);
+            found.unreadable.push_back(relative_text(folder, root));
             continue;
         }
         archives.clear(), manifests.clear(), below.clear();
-        bool output = false;   // unpacked here before: nothing of the game below
+        bool marked = false;   // has a .noscan file: the whole subtree is left out
         for (; !error && it != fs::directory_iterator(); it.increment(error)) {
             std::error_code type_error;
             if (it->is_symlink(type_error)) continue;
             if (it->is_directory(type_error)) {
-                if (it->path().filename() == "_archives") output = true;
-                if (std::ranges::find(skipped, it->path()) == skipped.end()) below.push_back(it->path());
+                below.push_back(it->path());
             } else if (it->is_regular_file(type_error)) {
-                if (iequals_ascii(to_utf8(it->path().extension()), ".npk")) archives.push_back(it->path());
+                const fs::path name = it->path().filename();
+                if (name == kNoScanFileName) marked = true;
+                else if (iequals_ascii(to_utf8(it->path().extension()), ".npk")) archives.push_back(it->path());
                 else if (is_manifest(it->path())) manifests.push_back(it->path());
             }
         }
-        if (output && folder != root) continue;
-        found.archives.insert(found.archives.end(), archives.begin(), archives.end());
-        found.manifests.insert(found.manifests.end(), manifests.begin(), manifests.end());
-        folders.insert(folders.end(), below.begin(), below.end());
-        if (progress) progress(found.archives.size(), found.manifests.size());
+        if (marked) {
+            found.skipped.push_back(relative_text(folder, root));
+        } else {
+            found.archives.insert(found.archives.end(), archives.begin(), archives.end());
+            found.manifests.insert(found.manifests.end(), manifests.begin(), manifests.end());
+            folders.insert(folders.end(), below.begin(), below.end());
+        }
+        if (progress) progress(found);
     }
     std::ranges::sort(found.archives);
     std::ranges::sort(found.manifests);
     std::ranges::sort(found.unreadable);
+    std::ranges::sort(found.skipped);
     return found;
 }
 
-Result<Installation> Installation::open(const fs::path& folder, const ScanProgress& progress,
-                                        const std::vector<fs::path>& skip)
+Result<void> mark_no_scan(const fs::path& folder)
+{
+    const fs::path path = folder / kNoScanFileName;
+    std::error_code error;
+    if (fs::is_regular_file(path, error)) return {};
+    fs::create_directories(folder, error);
+    std::ofstream file(long_path(path), std::ios::binary | std::ios::trunc);
+    file << kNoScanText;
+    file.close();
+    if (!file) return make_error(Errc::io_error, "cannot write " + to_utf8(path));
+    return {};
+}
+
+Result<Installation> Installation::open(const fs::path& folder, const ScanProgress& progress)
 {
     const fs::path root = resolved(folder);
     if (!is_dir(root)) return make_error(Errc::invalid_input, "installation folder not found: " + to_utf8(folder));
@@ -97,7 +117,7 @@ Result<Installation> Installation::open(const fs::path& folder, const ScanProgre
         return make_error(Errc::invalid_input, to_utf8(root) + " does not look like a game installation "
                                                                "(expected neox_bin/ or res/resdb + Documents/)");
     }
-    installation.scan(progress, skip);
+    installation.scan(progress);
     return installation;
 }
 
@@ -108,7 +128,7 @@ std::optional<Installation> Installation::find_above(const fs::path& path)
         folder = folder.parent_path();
         Installation candidate(folder);
         if (candidate.looks_valid()) {
-            candidate.scan({}, {});
+            candidate.scan({});
             return candidate;
         }
     }
@@ -127,12 +147,13 @@ bool Installation::looks_valid() const
     return has_engine || has_resources;
 }
 
-void Installation::scan(const ScanProgress& progress, const std::vector<fs::path>& skip)
+void Installation::scan(const ScanProgress& progress)
 {
-    FolderScan found = scan_folder(root_, progress, skip);
+    FolderScan found = scan_folder(root_, progress);
     archives_ = std::move(found.archives);
     manifests_ = std::move(found.manifests);
     unreadable_ = std::move(found.unreadable);
+    skipped_ = std::move(found.skipped);
 }
 
 std::vector<std::string> Installation::unreadable_resdb() const
