@@ -54,24 +54,25 @@ defaults above still apply.
 
 ## Dropping archives or folders onto the exe
 
-Windows starts the exe with the dropped paths as its arguments. Paths alone,
-without options, act as `--in`, with the same defaults as a double-click:
+Windows starts the exe with the dropped paths as its arguments. Archive paths
+given without an option act as `--in`, with the same defaults as a double-click:
 `--install` is the current folder if it is an installation, `--out` is
 `./unpacked`. There is no question: what was dropped is what gets unpacked.
 
 - **A dropped archive** is unpacked. When it lies inside an installation, that
   installation is found by walking up from it, so its names and override rules
   apply, wherever the exe is.
-- **A dropped folder** stands for every archive below it (folders marked
-  `.noscan` left out), and the name manifests found in it are used too.
-  `--in FOLDER` does the same.
+- **A dropped folder** is left alone, with a note: dropping a folder is meant
+  to pack it, and packing doesn't exist yet. Archives dropped with it are
+  still unpacked. (`--in FOLDER`, typed, unpacks every archive below the
+  folder and uses the name manifests found in it.)
 - **The current folder:** when Explorer starts the exe (a double-click or a
   drop), npkextpp first makes the exe's folder the current one. A drop may
   start a program in another folder; this way `.` and `./unpacked` are always
   next to the exe. From cmd or PowerShell the current folder is left as it is.
 - **The window stays open** at the end, as after a double-click.
 
-The same works from any terminal: `npkextpp path/to/ui.npk path/to/folder`.
+The same works from any terminal: `npkextpp path/to/ui.npk path/to/other.npk`.
 
 ## The steps before unpacking
 

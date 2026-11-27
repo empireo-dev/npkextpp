@@ -62,9 +62,9 @@ std::optional<CliOptions> parse_cli(int argc, char** argv, int& exit_code)
                    "or paths inside it (Documents/res/ui.npk). Default: every archive")
         ->group(source)
         ->expected(1, -1);
-    std::vector<std::string> paths;
-    app.add_option("paths", paths,
-                   "archives or folders, as with --in (what Windows passes when files are dropped onto the exe)")
+    app.add_option("archives", options.dropped,
+                   "archives, as with --in (what Windows passes when files are dropped onto the exe); "
+                   "folders are left alone for now (dropping a folder will pack it)")
         ->group(source);
     app.add_option("--resdb", options.resdb, "name manifests to use instead of the installation's (several allowed: give both "
                    "Documents/res/resdb and res/resdb)")
@@ -127,7 +127,6 @@ std::optional<CliOptions> parse_cli(int argc, char** argv, int& exit_code)
     options.verify = !no_verify;
     if (update_command->parsed()) options.update = update;
     options.guided = argc <= 1;
-    options.inputs.insert(options.inputs.end(), paths.begin(), paths.end());
     exit_code = kExitOk;
     return options;
 }

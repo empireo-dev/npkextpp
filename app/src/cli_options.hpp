@@ -26,6 +26,7 @@ struct CliOptions {
     std::optional<UpdateOptions> update;            // the update command was given
     std::optional<std::filesystem::path> install;   // game installation root
     std::vector<std::string> inputs;                // --in: archive paths / names / paths inside the installation
+    std::vector<std::string> dropped;               // paths without an option (dropped onto the exe)
     std::vector<std::filesystem::path> resdb;       // --resdb: manifests to use instead of the installation's
     std::vector<std::string> unpack;                // --unpack: only archives with these names
     std::optional<std::size_t> limit;               // --limit: first N entries of each archive

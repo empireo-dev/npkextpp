@@ -732,6 +732,12 @@ int main(int argc, char** argv)
     if (!parsed) return exit_code;
     CliOptions options = *parsed;
     Console::start_in_program_folder();   // before "." and ./unpacked mean anything
+    std::vector<std::string> dropped_folders;
+    for (const std::string& value : options.dropped) {
+        std::error_code error;
+        if (fs::is_directory(npk::from_utf8(value), error)) dropped_folders.push_back(value);
+        else options.inputs.push_back(value);
+    }
     if (!options.out) options.out = fs::path("unpacked");
 
     if (options.show_licenses) {
@@ -742,6 +748,16 @@ int main(int argc, char** argv)
     Console console;
     int code = kExitOk;
     try {
+        if (!dropped_folders.empty()) {
+            std::string names;
+            for (const std::string& folder : dropped_folders) names += "\n  " + folder;
+            console.line("Folders are left alone: dropping a folder will pack it, and packing is not available yet." +
+                         names);
+            if (options.inputs.empty()) {
+                if (Console::owns_window()) (void)console.ask("Press Enter to close. ");
+                return kExitBadInput;
+            }
+        }
         code = options.update ? run_update(*options.update, console) : run(options, console);
     } catch (const InputError& error) {
         console.error(error.what());
