@@ -45,4 +45,11 @@ struct CliOptions {
 // then what main() should return.
 [[nodiscard]] std::optional<CliOptions> parse_cli(int argc, char** argv, int& exit_code);
 
+// Undoes what Windows does to a quoted path that ends in a backslash. Its rule
+// reads \" as a quote character, so "..\Magic Awakened\" --out x arrives as one
+// argument, ..\Magic Awakened" --out x. A quote can't be part of a Windows path,
+// so an argument holding one is split back: the text before it plus the lost
+// backslash, then the rest, split at spaces. parse_cli() applies it on Windows.
+[[nodiscard]] std::vector<std::string> repair_quoted_backslash(const std::vector<std::string>& args);
+
 } // namespace npkextpp

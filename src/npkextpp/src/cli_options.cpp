@@ -2,6 +2,9 @@
 
 #include <CLI11.hpp>
 
+#include <algorithm>
+#include <string_view>
+
 namespace npkextpp {
 
 namespace {
@@ -44,6 +47,30 @@ examples:
 )";
 
 } // namespace
+
+std::vector<std::string> repair_quoted_backslash(const std::vector<std::string>& args)
+{
+    std::vector<std::string> repaired;
+    for (const std::string& arg : args) {
+        const std::size_t quote = arg.find('"');
+        if (quote == std::string::npos) {
+            repaired.push_back(arg);
+            continue;
+        }
+        repaired.push_back(arg.substr(0, quote) + '\\');
+        std::string word;
+        bool quoted = false;   // the rest may hold more quotes; they group words as a shell would
+        for (const char c : std::string_view(arg).substr(quote + 1)) {
+            if (c == '"') quoted = !quoted;
+            else if ((c == ' ' || c == '\t') && !quoted) {
+                if (!word.empty()) repaired.push_back(std::move(word));
+                word.clear();
+            } else word += c;
+        }
+        if (!word.empty()) repaired.push_back(std::move(word));
+    }
+    return repaired;
+}
 
 std::optional<CliOptions> parse_cli(int argc, char** argv, int& exit_code)
 {
@@ -118,7 +145,14 @@ std::optional<CliOptions> parse_cli(int argc, char** argv, int& exit_code)
     app.require_subcommand(0, 1);
 
     try {
+#ifdef _WIN32
+        // The program name stays first; CLI11 wants the arguments in reverse.
+        std::vector<std::string> args = repair_quoted_backslash(std::vector<std::string>(argv + (argc > 0 ? 1 : 0), argv + argc));
+        std::ranges::reverse(args);
+        app.parse(std::move(args));
+#else
         app.parse(argc, argv);
+#endif
     } catch (const CLI::ParseError& error) {
         exit_code = app.exit(error);
         if (exit_code != 0) exit_code = kExitBadInput;

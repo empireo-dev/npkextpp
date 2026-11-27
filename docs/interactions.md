@@ -140,3 +140,8 @@ and Windows Terminal. The Windows side has not been tested yet.
   `.desktop` launcher is set up. macOS needs an app bundle.
 - **Dropping a file onto an open console window** types its path, in every
   system's terminal, so a question that asks for a path works everywhere.
+- **A quoted path ending in a backslash** (`--install "C:\Games\Magic Awakened\"`):
+  Windows reads `\"` as a quote character, so the path and everything after it
+  arrive as one argument. npkextpp splits such an argument back (a quote can't
+  be part of a Windows path), so the path keeps its backslash and the options
+  after it work. Leaving out the last backslash avoids the problem everywhere.
