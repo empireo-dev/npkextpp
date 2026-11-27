@@ -13,7 +13,6 @@
 #include <chrono>
 #include <cstdint>
 #include <deque>
-#include <span>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -25,11 +24,9 @@ namespace npkextpp {
 // The disk test's readings and the drive type it led to.
 [[nodiscard]] ftxui::Element disk_test(const npk::pipeline::DiskProbe& probe);
 
-// `missing`: archives of the known list that are not in the installation.
 class Dashboard {
 public:
-    Dashboard(const npk::Plan& plan, std::span<const std::string> missing, const npk::pipeline::Progress& progress,
-              npk::pipeline::DiskKind disk);
+    Dashboard(const npk::Plan& plan, const npk::pipeline::Progress& progress, npk::pipeline::DiskKind disk);
 
     // One live frame, at most `rows` rows high. When the archives don't fit, the
     // list shows a window of them that follows the archive being unpacked, or
@@ -55,9 +52,8 @@ private:
         std::uint32_t existing = 0;   // already in the output folder
         std::uint64_t bytes = 0;
         std::size_t index = 0;        // into Progress::sources()
-        bool missing = false;
     };
-    enum class State { waiting, active, done, failed, existing, missing, not_reached };
+    enum class State { waiting, active, done, failed, existing, not_reached };
     struct Cell {   // one place in the archive list
         const Archive* archive = nullptr;
         State state = State::waiting;

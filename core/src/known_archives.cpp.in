@@ -1,6 +1,0 @@
-// Generated from core/data/known_archives.txt by CMake. Do not edit.
-namespace npk {
-extern const char* const kKnownArchivesText;
-const char* const kKnownArchivesText = ""
-@NPK_KNOWN_ARCHIVES@    "";
-} // namespace npk

@@ -107,8 +107,7 @@ Element disk_test(const npk::pipeline::DiskProbe& probe)
     return vbox(std::move(lines));
 }
 
-Dashboard::Dashboard(const npk::Plan& plan, std::span<const std::string> missing,
-                     const npk::pipeline::Progress& progress, npk::pipeline::DiskKind disk)
+Dashboard::Dashboard(const npk::Plan& plan, const npk::pipeline::Progress& progress, npk::pipeline::DiskKind disk)
     : progress_(progress)
     , disk_(disk)
 {
@@ -116,7 +115,7 @@ Dashboard::Dashboard(const npk::Plan& plan, std::span<const std::string> missing
     std::uint32_t largest = 0;
     for (const npk::OutputGroup& group : plan.groups) {
         for (const npk::ArchiveSource& source : group.sources) {
-            Archive archive{source.label(), 0, 0, 0, index++, false};
+            Archive archive{source.label(), 0, 0, 0, index++};
             for (const npk::PlannedEntry& planned : source.entries) {
                 if (planned.disposition == npk::Disposition::skip) continue;
                 if (planned.status == npk::EntryStatus::existing) {
@@ -133,7 +132,6 @@ Dashboard::Dashboard(const npk::Plan& plan, std::span<const std::string> missing
             archives_.push_back(std::move(archive));
         }
     }
-    for (const std::string& label : missing) archives_.push_back(Archive{label, 0, 0, 0, 0, true});
     const std::string widest = format_count(largest);
     count_width_ = static_cast<int>(widest.size() * 2 + 1);
 }
@@ -199,7 +197,6 @@ void Dashboard::scroll(Scroll how, int lines)
 
 Dashboard::State Dashboard::state_of(const Archive& archive, bool finished) const
 {
-    if (archive.missing) return State::missing;
     if (archive.files == 0) return State::existing;
     const auto& counts = progress_.sources()[archive.index];
     const std::uint32_t done = counts.files_done.load(std::memory_order_relaxed);
@@ -266,14 +263,14 @@ Element Dashboard::cell(const Cell& c, int width) const
 {
     const Archive& a = *c.archive;
     const int name_width = width - (2 + 1 + kGauge + 1 + count_width_ + 1 + kStatus);
-    const npk::pipeline::SourceProgress* counts = a.missing ? nullptr : &progress_.sources()[a.index];
-    const std::uint32_t done = counts ? std::min(counts->files_done.load(std::memory_order_relaxed), a.files) : 0;
-    const std::uint64_t bytes = counts ? counts->bytes_done.load(std::memory_order_relaxed) : 0;
+    const npk::pipeline::SourceProgress& counts = progress_.sources()[a.index];
+    const std::uint32_t done = std::min(counts.files_done.load(std::memory_order_relaxed), a.files);
+    const std::uint64_t bytes = counts.bytes_done.load(std::memory_order_relaxed);
 
     std::string icon = "·";
     std::string status;
     Color tone = Color::GrayDark;
-    float share = a.files ? static_cast<float>(done) / static_cast<float>(a.files) : 1.0F;
+    const float share = a.files ? static_cast<float>(done) / static_cast<float>(a.files) : 1.0F;
     switch (c.state) {
     case State::waiting: status = "waiting"; break;
     case State::active: {
@@ -286,20 +283,18 @@ Element Dashboard::cell(const Cell& c, int width) const
     case State::done: icon = "✓", tone = Color::Green, status = "done"; break;
     case State::failed:
         icon = "✗", tone = Color::Red;
-        status = format_count(counts ? counts->files_failed.load() : 0) + " failed";
+        status = format_count(counts.files_failed.load()) + " failed";
         break;
     case State::existing: icon = "✓", status = a.existing ? "already there" : "nothing new"; break;
-    case State::missing: icon = "✗", tone = Color::Red, status = "missing", share = 0; break;
     case State::not_reached: icon = "-", status = done ? "stopped" : "not reached"; break;
     }
-    const std::string count = a.missing                    ? ""
-                              : c.state == State::existing ? format_count(a.existing)
-                                                           : format_count(done) + "/" + format_count(a.files);
+    const std::string count =
+        c.state == State::existing ? format_count(a.existing) : format_count(done) + "/" + format_count(a.files);
     return hbox({
         fixed(text(icon) | color(tone), 2),
         fixed(text(ellipsize(a.label, name_width)) | (c.state == State::waiting ? dim : nothing), std::max(name_width, 4)),
         text(" "),
-        fixed(a.missing ? text("") : gauge(share) | color(tone), kGauge),
+        fixed(gauge(share) | color(tone), kGauge),
         text(" "),
         right(count, count_width_),
         text(" "),

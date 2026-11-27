@@ -81,8 +81,7 @@ struct Inputs {
 Inputs find_archives(const CliOptions& options)
 {
     Inputs inputs;
-    const auto search = options.scan ? npk::ArchiveSearch::scan : npk::ArchiveSearch::known;
-    if (options.install) inputs.installation = unwrap(npk::Installation::open(*options.install, search));
+    if (options.install) inputs.installation = unwrap(npk::Installation::open(*options.install));
     const npk::Installation* installation = inputs.installation ? &*inputs.installation : nullptr;
 
     if (!options.inputs.empty()) {
@@ -108,43 +107,13 @@ std::string section_name(std::string_view section)
     return section.empty() ? std::string("(top level)") : std::string(section) + "/";
 }
 
-// Archives of the known list that are not there, if the whole installation is unpacked.
-std::vector<std::string> missing_archives(const CliOptions& options, const std::optional<npk::Installation>& installation)
-{
-    std::vector<std::string> missing;
-    if (!installation || !options.inputs.empty()) return missing;
-    for (const std::string& path : installation->missing_archives()) {
-        const std::string name = npk::lower_ascii(path.substr(path.rfind('/') + 1));
-        bool wanted = options.unpack.empty();
-        for (const std::string& pattern : options.unpack) {
-            std::string p = npk::lower_ascii(pattern);
-            if (!p.ends_with(".npk")) p += ".npk";
-            wanted = wanted || npk::wildcard_match(name, p);
-        }
-        if (wanted) missing.push_back(path);
-    }
-    return missing;
-}
-
-void show_sources(Console& console, const std::optional<npk::Installation>& installation, std::size_t selected,
-                  std::size_t missing)
+void show_sources(Console& console, const std::optional<npk::Installation>& installation, std::size_t selected)
 {
     if (!installation) return;
     console.line("Installation  " + npk::to_utf8(installation->root()));
     const std::size_t found = installation->archives().size();
     const std::string chosen = selected == found ? "" : ", " + format_count(selected) + " selected";
-    if (installation->scanned()) {
-        const std::string why = installation->known_count() == 0
-                                    ? " (the built-in list of the game's archives is empty)"
-                                    : " (none of the " + format_count(installation->known_count()) +
-                                          " known archives is here)";
-        console.line("Archives      " + format_count(found) + " found by scanning the installation" + chosen +
-                     (why.empty() ? "" : why));
-    } else {
-        console.line("Archives      " + format_count(found) + " of " + format_count(installation->known_count()) +
-                     " known archives here" + chosen + (missing ? ", " + format_count(missing) + " missing" : "") +
-                     " (--scan looks for others)");
-    }
+    console.line("Archives      " + format_count(found) + " found in the installation" + chosen);
     const auto& blocked = installation->unreadable_folders();
     if (!blocked.empty()) {
         std::string names;
@@ -387,8 +356,7 @@ int run(const CliOptions& options, Console& console)
     if (!options.out && !options.dry_run) throw InputError("--out DIR is required (or use --dry-run to only look)");
 
     Inputs inputs = find_archives(options);
-    const std::vector<std::string> missing = missing_archives(options, inputs.installation);
-    show_sources(console, inputs.installation, inputs.archives.size(), missing.size());
+    show_sources(console, inputs.installation, inputs.archives.size());
 
     std::vector<fs::path> resdb_files = options.resdb;
     if (resdb_files.empty() && inputs.installation) resdb_files = inputs.installation->resdb_files();
@@ -451,7 +419,7 @@ int run(const CliOptions& options, Console& console)
     pipeline_options.disk_kind = disk;
 
     npk::pipeline::Progress progress(plan.source_count());
-    Dashboard dashboard(plan, missing, progress, disk);
+    Dashboard dashboard(plan, progress, disk);
     std::stop_source cancel;
     std::signal(SIGINT, on_interrupt);
     npk::pipeline::Summary summary;

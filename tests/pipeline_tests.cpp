@@ -71,7 +71,7 @@ struct Fixture {
     explicit Fixture(const std::function<fs::path(const fs::path&)>& build, npk::PlanOptions options = {})
     {
         const fs::path root = build(dir.path());
-        installation = *npk::Installation::open(root, npk::ArchiveSearch::scan);
+        installation = *npk::Installation::open(root);
         manifest = *npk::ResourceManifest::from_files(installation->resdb_files());
         npk::Planner planner(manifest, &*installation);
         plan = planner.build(installation->archives(), options);
@@ -277,7 +277,7 @@ TEST(entries_sharing_stored_bytes_decode_independently)
     write_file(root / "res" / "x.npk", npk);
     write_resdb(root / "res" / "resdb", {"x\\a.bin", "x\\b.bin", "x\\c.bin", "x\\a2.bin", "x\\b2.bin"});
 
-    const auto installation = *npk::Installation::open(root, npk::ArchiveSearch::scan);
+    const auto installation = *npk::Installation::open(root);
     const auto manifest = *npk::ResourceManifest::from_files(installation.resdb_files());
     npk::Planner planner(manifest, &installation);
     npk::Plan plan = planner.build(installation.archives(), {});
@@ -311,7 +311,7 @@ TEST(damaged_entries_fail_alone)
     write_file(root / "res" / "x.npk", npk);
     write_resdb(root / "res" / "resdb", {"x\\good.txt", "x\\bad.txt", "x\\raw.txt"});
 
-    const auto installation = *npk::Installation::open(root, npk::ArchiveSearch::scan);
+    const auto installation = *npk::Installation::open(root);
     const auto manifest = *npk::ResourceManifest::from_files(installation.resdb_files());
     npk::Planner planner(manifest, &installation);
     npk::Plan plan = planner.build(installation.archives(), {});
@@ -367,7 +367,7 @@ TEST(a_second_run_keeps_earlier_index_rows)
 {
     TempDir dir;
     const fs::path root = fake_install(dir.path());
-    const auto installation = *npk::Installation::open(root, npk::ArchiveSearch::scan);
+    const auto installation = *npk::Installation::open(root);
     const auto manifest = *npk::ResourceManifest::from_files(installation.resdb_files());
     npk::Planner planner(manifest, &installation);
     pl::Options options;

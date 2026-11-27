@@ -63,9 +63,6 @@ std::optional<CliOptions> parse_cli(int argc, char** argv, int& exit_code)
     app.add_option("--resdb", options.resdb, "name manifests to use instead of the installation's")
         ->group(source)
         ->expected(1, -1);
-    app.add_flag("--scan", options.scan,
-                 "look for archives in the whole installation instead of checking the game's known list")
-        ->group(source);
 
     auto* selection = "what to unpack";
     app.add_option("--unpack", options.unpack, "only archives with these names (wildcards allowed). Default: all")

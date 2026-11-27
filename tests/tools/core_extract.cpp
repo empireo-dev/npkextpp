@@ -38,7 +38,7 @@ int main(int argc, char** argv)
         }
     }
 
-    auto installation = npk::Installation::open(install, npk::ArchiveSearch::scan);
+    auto installation = npk::Installation::open(install);
     if (!installation) {
         std::fprintf(stderr, "%s\n", installation.error().message.c_str());
         return 2;

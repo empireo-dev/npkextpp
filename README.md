@@ -22,13 +22,10 @@ npkextpp --install "path/to/Magic Awakened" --entry ui/login/bg.png --out .
 `npkextpp --help` lists every option. The options and exit codes are the same as
 npkext's (0 ok, 1 some entries failed, 2 bad input, 130 interrupted), plus:
 
-- `--scan` looks for archives in the whole installation. Without it, the app only
-  checks which archives of the game's known list
-  ([core/data/known_archives.txt](core/data/known_archives.txt), compiled in) are
-  there, and lists the others as missing. The list has the 689 archives of the
-  game as of November 2026. While no archive of that list is found (another game
-  version), it scans on its own. Folders of the installation that cannot be
-  opened (permission denied) are named in a warning, as is a missing name manifest.
+- `--install` walks the whole installation for `.npk` files, so any game version
+  or client (global, TW, CN) works and archives added by an update are found.
+  Folders of the installation that cannot be opened (permission denied) are named
+  in a warning, as is a missing name manifest.
 - `--overwrite` writes every file again. Without it, files already in the output
   folder with the right size are kept, so a second run, or one after an
   interrupted run, writes only what is missing.
@@ -69,10 +66,10 @@ What the screen shows, in a terminal (redrawn every 50 ms, drawn with
    output), with the average time per block or file;
 4. **Progress:** a bar, the percentage, elapsed time and ETA, files and bytes done, speed;
 5. **Archives:** every archive in two columns (one on a narrow terminal), each with
-   its own bar, files done and ETA; missing ones are marked. When they don't fit
-   the terminal, the list shows a window of them that follows the archive being
-   unpacked; the mouse wheel, the arrow keys, PgUp/PgDn and Home/End scroll it, and
-   F follows progress again.
+   its own bar, files done and ETA. When they don't fit the terminal, the list
+   shows a window of them that follows the archive being unpacked; the mouse
+   wheel, the arrow keys, PgUp/PgDn and Home/End scroll it, and F follows
+   progress again.
 
 The ETA comes from the work done in each second of the last 5 minutes
 (bytes, plus 64 KiB for each file), weighted by (1 - age / 5 min)², so the last
