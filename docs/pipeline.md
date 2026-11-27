@@ -416,7 +416,7 @@ run has another size and is written again.
   - archives whose entries share stored bytes;
   - damaged entries;
   - a fatal error forced by a read-only output folder.
-- `compare_with_npkext.py --extractor build/app/npkextpp` runs the real executable
+- `compare_with_npkext.py --extractor build/npkextpp` runs the real executable
   against npkext on random installations, including the `_archives/` index.
 - `tune_sim` runs the pipeline and the tuner against a simulated SSD or HDD
   (`docs/simulated_disk.md`), for tuner work without real disks.

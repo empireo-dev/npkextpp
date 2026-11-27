@@ -99,9 +99,9 @@ Redirected to a file, it prints the same without colours, a progress line every
 
 | Folder | Target | What it is |
 |---|---|---|
-| `core/` | `npk::core` (static lib) | The NXPK format: TOC, decrypt, decompress, checksums, resdb, mount rules, names, planning. No threads, no I/O policy. Take this into other projects (nxscriptpp). |
-| `pipeline/` | `npk::pipeline` (static lib) | Multi-threaded extraction of a whole plan: Reader → Decoders (all cores) → Writers (count tuned at run time). Design: [docs/pipeline.md](docs/pipeline.md). |
-| `app/` | `npkextpp` (exe) | Command line front end. One self-contained executable. |
+| `src/core/` | `npk::core` (static lib) | The NXPK format: TOC, decrypt, decompress, checksums, resdb, mount rules, names, planning. No threads, no I/O policy. Take this into other projects (nxscriptpp). |
+| `src/pipeline/` | `npk::pipeline` (static lib) | Multi-threaded extraction of a whole plan: Reader → Decoders (all cores) → Writers (count tuned at run time). Design: [docs/pipeline.md](docs/pipeline.md). |
+| `src/npkextpp/` | `npkextpp` (exe) | The main project: the command line front end. One self-contained executable. |
 | `tests/` | `core_tests`, `pipeline_tests`, `core_extract` | Built with `-DNPKEXTPP_BUILD_TESTS=ON`. |
 | `third_party/` | | Vendored dependency archives, see [third_party/README.md](third_party/README.md). |
 
@@ -131,7 +131,7 @@ On Windows with MSVC, run these from a "x64 Native Tools Command Prompt for VS"
 (or after `vcvars64.bat`) so the compiler and Ninja are on `PATH`. Visual
 Studio's bundled CMake and Ninja also work from the IDE.
 
-The result is a single file, `build/app/npkextpp` (`npkextpp.exe`), with no
+The result is a single file, `build/npkextpp` (`build/npkextpp.exe`), with no
 DLLs, configs or resources next to it:
 
 - MSVC: static runtime (`/MT`).
@@ -150,7 +150,7 @@ Comparison with the Python npkext on random synthetic installations (needs npkex
 and its Python dependencies):
 
 ```bash
-python3 tests/compare_with_npkext.py --npkext ../npkext --extractor build/app/npkextpp --index --seeds 20
+python3 tests/compare_with_npkext.py --npkext ../npkext --extractor build/npkextpp --index --seeds 20
 ```
 
 Benchmark on a synthetic ~2 GB installation (put it on the disk you want to measure):
@@ -158,7 +158,7 @@ Benchmark on a synthetic ~2 GB installation (put it on the disk you want to meas
 ```bash
 python3 tests/bench/make_install.py --npkext ../npkext --out build/bench
 python3 tests/bench/run_bench.py --npkext ../npkext --install build/bench/install --work build/bench \
-    --core build/tests/core_extract --app build/app/npkextpp
+    --core build/tests/core_extract --app build/npkextpp
 ```
 
 The tuner against a simulated SSD or HDD, writing nothing

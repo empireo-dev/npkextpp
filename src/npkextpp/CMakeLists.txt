@@ -1,4 +1,4 @@
-# npkextpp: the command line tool. Built as one self-contained executable: static
+# npkextpp: the main project, the command line tool. Built as one self-contained executable: static
 # runtime, no DLLs, no config or resource files next to it.
 include("${PROJECT_SOURCE_DIR}/cmake/NpkWarnings.cmake")
 
@@ -33,6 +33,12 @@ target_include_directories(npkextpp PRIVATE src)
 target_compile_definitions(npkextpp PRIVATE NPKEXTPP_VERSION="${PROJECT_VERSION}")
 target_link_libraries(npkextpp PRIVATE npk::pipeline CLI11::CLI11 ftxui::dom ftxui::screen)
 npk_target_warnings(npkextpp)
+
+# Built on its own: the exe lands at the top of the build folder (build/npkextpp,
+# build/npkextpp.exe), not buried in build/src/npkextpp/.
+if(PROJECT_IS_TOP_LEVEL)
+    set_target_properties(npkextpp PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${PROJECT_BINARY_DIR}")
+endif()
 
 if(MINGW)
     target_link_options(npkextpp PRIVATE -static)

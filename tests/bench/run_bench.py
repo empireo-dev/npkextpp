@@ -6,7 +6,7 @@ Before each run the archives are dropped from the OS cache (posix_fadvise
 DONTNEED, no root needed), so every tool reads them from the disk.
 
     python3 tests/bench/run_bench.py --npkext ../npkext --install build/bench/install \\
-        --work build/bench --core build/tests/core_extract --app build/app/npkextpp
+        --work build/bench --core build/tests/core_extract --app build/npkextpp
 """
 
 from __future__ import annotations
