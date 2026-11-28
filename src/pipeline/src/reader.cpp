@@ -2,14 +2,13 @@
 
 #include "npk/input_file.hpp"
 #include "npk/paths.hpp"
+#include "npk/read_range.hpp"
 
 #include <algorithm>
 
 namespace npk::pipeline {
 
 namespace {
-
-std::uint64_t end_of(const Entry& entry) { return std::uint64_t{entry.offset} + entry.packed_size; }
 
 // Entries whose stored bytes overlap another entry's in the same chunk must be
 // decoded from a copy: decryption works in place. Entries are in offset order.
@@ -20,7 +19,7 @@ void mark_shared(std::vector<ChunkEntry>& entries)
         if (ea.packed_size == 0) continue;
         for (std::size_t b = a + 1; b < entries.size(); ++b) {
             const Entry& eb = *entries[b].entry;
-            if (eb.offset >= end_of(ea)) break;   // sorted by offset: nothing further can overlap a
+            if (eb.offset >= stored_end(ea)) break;   // sorted by offset: nothing further can overlap a
             if (eb.packed_size == 0) continue;
             entries[a].shared = true;
             entries[b].shared = true;
@@ -67,7 +66,7 @@ void Reader::read_source(ArchiveSource& source, std::uint32_t index)
 
     // Entries whose bytes are not inside the file fail on their own.
     std::erase_if(todo, [&](PlannedEntry* planned) {
-        if (end_of(source.entry(*planned)) <= file->size()) return false;
+        if (stored_end(source.entry(*planned)) <= file->size()) return false;
         ctx_.fail(*planned, "data runs past the end of " + to_utf8(source.path.filename()), index);
         return true;
     });
@@ -77,18 +76,10 @@ void Reader::read_source(ArchiveSource& source, std::uint32_t index)
     while (i < todo.size() && !stop.stop_requested()) {
         // Merge neighbours into one read of at most read_block bytes.
         const std::uint64_t block = ctx_.tunables.read_block.load(std::memory_order_relaxed);
-        const std::uint64_t start = source.entry(*todo[i]).offset;
-        std::uint64_t end = end_of(source.entry(*todo[i]));
-        std::size_t j = i + 1;
-        while (j < todo.size()) {
-            const Entry& next = source.entry(*todo[j]);
-            const std::uint64_t gap = next.offset > end ? next.offset - end : 0;
-            const std::uint64_t new_end = std::max(end, end_of(next));
-            if (gap > kMaxGap || new_end - start > block) break;
-            end = new_end;
-            ++j;
-        }
-        const std::size_t size = static_cast<std::size_t>(end - start);
+        const auto [start, length, j] = next_read_range(i, todo.size(),
+            [&](std::size_t index) -> const Entry& { return source.entry(*todo[index]); },
+            block, kMaxGap);
+        const auto size = static_cast<std::size_t>(length);
 
         clock_.enter(StageState::waiting_output);
         if (!ctx_.read_budget.acquire(size, stop)) return;
